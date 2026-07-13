@@ -2,7 +2,7 @@
 
 Auditoi ja korjaa verkkosivuston SEO:n (hakukonenäkyvyys) ja AEO:n
 (näkyvyys tekoälyhauissa kuten ChatGPT ja Perplexity). Uusin versio on
-`aeo_seo_tool_v4.py` — v1–v3 ovat mukana vertailun vuoksi.
+`aeo_seo_tool_v5.py` — v1–v4 ovat mukana vertailun vuoksi.
 
 ## Asennus
 
@@ -28,6 +28,30 @@ python3 aeo_seo_tool_v4.py --url https://example.com
 #   --site-name "Yritys"   sivuston nimi, jos auto-tunnistus ei onnistu
 #   --site-url https://... sivuston osoite
 #   --eur-rate 0.90        USD→EUR-kurssi kustannuslaskentaan
+```
+
+## Uutta v5:ssä
+
+**Klar-yhteensopiva vienti** (`--klar-json`). Tuottaa raporttien rinnalle
+klar-consolen WS-F-määrittelyn mukaisen SeoResult-JSONin: pisteet ulottuvuuksittain
+(onPage / aeo / funnel, 0–100) ja löydökset vakavuusluokittain (warn / critical)
+korjausehdotuksineen. Tiedosto (`reports/klar_seoresult_*.json`) on suoraan siinä
+muodossa, jonka konsolin `seo_runs`-taulu odottaa — tallennus tehdään Klarin
+puolella ohuella TS-kerroksella. Vienti on puhdasta analyysia (ei AI-generoitua
+sisältöä), kuten Klarin säännöt vaativat.
+
+**Funnel- ja varauswidget-tarkistukset.** Uusi tarkistusryhmä: löytyykö sivulta
+toimintakehote, soittolinkki ja yhteydenottotapa — ja ravintoloilla: onko
+varauswidget kytketty oikein (`widget.js` + kelvollinen `data-restaurant`-slug).
+Esikatselupohjien demolomake (näyttää varaukselta, ei tee mitään) tunnistetaan
+ja siitä varoitetaan.
+
+**Monisivuinen ryömintä** (`--max-pages`, oletus 10). URL-tilassa työkalu seuraa
+sivuston omia linkkejä ja auditoi useita sivuja yhdellä komennolla — kohteliaasti
+0,5 sekunnin välein. Arvolla 1 saat vanhan yhden sivun käytöksen.
+
+```bash
+python3 aeo_seo_tool_v5.py --url https://ravintola.fi --max-pages 10 --klar-json
 ```
 
 ## Uutta v4:ssä
