@@ -72,6 +72,44 @@ GOOGLE_VERIFY_RE = re.compile(r"google[0-9a-f]{12,}\.html?$", re.I)
 ICONS  = {"pass": "✅", "warn": "⚠️ ", "fail": "❌"}
 COLORS = {"pass": "green", "warn": "yellow", "fail": "red"}
 
+# Selkokieliset nimet ja selitykset asiakasraporttia varten:
+# tarkistuksen nimi → (selkokielinen nimi, yhden lauseen selitys)
+PLAIN_FI = {
+    "Title-tägi": ("Sivun otsikko hakutuloksissa",
+        "Otsikko, joka näkyy Googlen hakutuloksissa ja selaimen välilehdellä."),
+    "Meta Description": ("Hakutuloksen kuvausteksti",
+        "Lyhyt teksti, jonka Google näyttää sivusi otsikon alla hakutuloksissa."),
+    "Canonical-tägi": ("Sivun ensisijainen osoite",
+        "Kertoo hakukoneille sivun virallisen osoitteen, ettei sama sisältö näy useana kopiona."),
+    "Robots Meta": ("Hakukoneiden pääsy sivulle",
+        "Kertoo, saavatko hakukoneet näyttää sivun hakutuloksissa."),
+    "HTML lang-attribuutti": ("Sivun kielimerkintä",
+        "Kertoo hakukoneille, millä kielellä sivu on kirjoitettu."),
+    "H1-otsikko": ("Sivun pääotsikko",
+        "Jokaisella sivulla tulisi olla yksi selkeä pääotsikko."),
+    "Otsikkorakenne": ("Otsikoiden järjestys",
+        "Väliotsikoiden pitää edetä loogisesti kuin sisällysluettelossa."),
+    "Kuvien alt-tekstit": ("Kuvien tekstivastineet",
+        "Sanallinen kuvaus kuvista hakukoneille ja näkövammaisten ruudunlukijoille."),
+    "Open Graph": ("Some-jakotiedot",
+        "Määrittää, miltä linkki näyttää, kun sivu jaetaan Facebookissa tai LinkedInissä."),
+    "Twitter/X Card": ("X:n (Twitterin) jakotiedot",
+        "Määrittää, miltä linkki näyttää X-palvelussa jaettuna."),
+    "JSON-LD / Structured Data": ("Koneluettava sisältökuvaus",
+        "Auttaa Googlea ja tekoälyassistentteja (ChatGPT, Perplexity) ymmärtämään, mitä sivu käsittelee."),
+    "AEO-sisältösignaalit": ("Tekoälyystävällinen sisältö",
+        "Kysymys–vastaus-muotoinen ja listamainen sisältö, jota tekoälyhaut nostavat esiin."),
+    "Auktoriteetti & luottamus": ("Luotettavuuden merkit",
+        "Yhteystiedot, tietosuojasivu ja some-linkit lisäävät luottamusta kävijöiden ja hakukoneiden silmissä."),
+    "Sisällön laatu": ("Sisällön laatu",
+        "Riittävästi tekstiä, selkeä arvolupaus ja kehotus toimintaan."),
+    "Sisäiset linkit": ("Linkit omien sivujen välillä",
+        "Sivujen väliset linkit auttavat kävijöitä ja hakukoneita liikkumaan sivustolla."),
+}
+
+def plain_name(check_name: str) -> str:
+    return PLAIN_FI.get(check_name, (check_name, ""))[0]
+
 # ── Tietorakenteet ──────────────────────────────────────────────────────────
 
 @dataclass
@@ -427,16 +465,19 @@ Palauta VAIN JSON-taulukko:
         """Generoi strategisia AEO/SEO-suosituksia koko sivustolle."""
         if not self.available:
             return ""
-        low = [f"{p}: {s}/100" for p, s in page_scores.items() if s < 80]
-        if not low:
-            return ""
-        prompt = f"""Olet kokenut SEO/AEO-konsultti. Tee lyhyt strateginen yhteenveto {self.site.name or 'sivuston'} tilanteesta.
+        all_scores = ", ".join(f"{p}: {s}/100" for p, s in page_scores.items())
+        low = [p for p, s in page_scores.items() if s < 80]
+        prompt = f"""Olet kokenut hakukonenäkyvyyden konsultti. Kirjoita lyhyt yhteenveto sivuston {self.site.name or self.site.url or ''} kunnosta asiakkaalle, joka EI tunne teknistä SEO-sanastoa.
 
-Sivut alle 80 pistettä: {', '.join(low) if low else 'kaikki yli 80'}
-Sivusto: {self.site.url}
+Sivujen pisteet (0–100): {all_scores}
+Eniten parannettavaa: {', '.join(low) if low else 'ei yhdessäkään — sivusto on hyvässä kunnossa'}
 
-Kirjoita 3–4 konkreettista, prioriteetin mukaan järjestettyä toimenpidettä. Pidä tiiviinä. Vastaa suomeksi."""
-        return self._ask(prompt, 300)
+Kirjoita:
+1. Yksi lause sivuston kokonaistilanteesta arkikielellä.
+2. 2–4 tärkeintä toimenpidettä tärkeysjärjestyksessä, jokainen omalla rivillään alkaen numerolla.
+
+Vältä teknisiä termejä (älä käytä sanoja kuten "meta tag", "canonical", "JSON-LD" ilman selitystä). Puhuttele asiakasta suoraan. Vastaa suomeksi, korkeintaan 120 sanaa. Palauta VAIN teksti."""
+        return self._ask(prompt, 350)
 
 
 # ── Auditoija ───────────────────────────────────────────────────────────────
@@ -1310,19 +1351,19 @@ def print_results(checks: List[Check], title: str = ""):
 
 def recommendations(checks: List[Check]) -> List[str]:
     priority = [
-        ("JSON-LD / Structured Data", "Lisää/korjaa JSON-LD rakenteellinen data — kriittistä AEO:lle (ChatGPT, Perplexity)"),
-        ("Meta Description",          "Kirjoita optimoitu meta description (120–160 merkkiä)"),
-        ("Title-tägi",                "Optimoi title: 30–60 merkkiä, pääavainsana + brändi"),
-        ("H1-otsikko",                "Lisää yksi H1-otsikko jokaiselle sivulle"),
-        ("Open Graph",                "Lisää Open Graph -tagit — parantaa some-jakoa merkittävästi"),
-        ("Twitter/X Card",            "Lisää Twitter/X Card -metatagit"),
-        ("AEO-sisältösignaalit",      "Lisää Q&A-osio tai FAQPage-skeema — AI-assistentit suosivat vastausmuotoista sisältöä"),
-        ("Auktoriteetti & luottamus", "Lisää yhteystiedot, tietosuojasivu ja sosiaalisen median linkit"),
-        ("Kuvien alt-tekstit",        "Lisää kuvaava alt-teksti jokaiselle sisältökuvalle"),
-        ("Otsikkorakenne",            "Korjaa otsikkorakenne — ei hyppyjä (H1→H3 tms.)"),
-        ("Canonical-tägi",            "Lisää canonical-tägi kanonisointia varten"),
-        ("HTML lang-attribuutti",     "Lisää lang-attribuutti HTML-tagiin"),
-        ("Sisäiset linkit",           "Lisää linkkejä omille muille sivuille — parantaa hakurobottien toimintaa"),
+        ("JSON-LD / Structured Data", "Lisää sivuille koneluettava sisältökuvaus (JSON-LD) — sen avulla Google ja tekoälyhaut kuten ChatGPT ymmärtävät, mitä yrityksesi tekee"),
+        ("Meta Description",          "Kirjoita jokaiselle sivulle kuvausteksti, jonka Google näyttää hakutuloksissa (120–160 merkkiä)"),
+        ("Title-tägi",                "Muotoile sivujen otsikot: 30–60 merkkiä, tärkein hakusana ja yrityksen nimi"),
+        ("H1-otsikko",                "Lisää jokaiselle sivulle yksi selkeä pääotsikko"),
+        ("Open Graph",                "Lisää some-jakotiedot, jotta linkit näyttävät hyviltä Facebookissa ja LinkedInissä"),
+        ("Twitter/X Card",            "Lisää X:n (Twitterin) jakotiedot"),
+        ("AEO-sisältösignaalit",      "Lisää sivuille usein kysyttyjä kysymyksiä vastauksineen — tekoälyhaut nostavat tällaista sisältöä esiin"),
+        ("Auktoriteetti & luottamus", "Varmista, että yhteystiedot, tietosuojaseloste ja some-linkit löytyvät sivuilta"),
+        ("Kuvien alt-tekstit",        "Lisää kuville sanalliset kuvaukset (alt-tekstit)"),
+        ("Otsikkorakenne",            "Korjaa väliotsikoiden järjestys loogiseksi — ei hyppyjä tasolta toiselle"),
+        ("Canonical-tägi",            "Lisää sivuille ensisijainen osoite (canonical), ettei sama sisältö näy hakukoneille useana kopiona"),
+        ("HTML lang-attribuutti",     "Lisää sivuille kielimerkintä, jotta hakukoneet tietävät sisällön kielen"),
+        ("Sisäiset linkit",           "Lisää linkkejä omien sivujen välille — helpottaa sekä kävijöitä että hakukoneita"),
     ]
     bad = {c.name for c in checks if c.status != "pass"}
     return [r for n, r in priority if n in bad]
@@ -1336,6 +1377,7 @@ def generate_html_report(
     before_results: Optional[Dict[str, List[Check]]] = None,
     fixes_applied: Dict[str, List[str]] = None,
     output_path: Path = None,
+    ai_summary: str = "",
 ) -> Path:
     """Generoi kauniin dark-theme HTML-raportin tuloksista."""
 
@@ -1424,10 +1466,12 @@ def generate_html_report(
             for c in cat_chs:
                 icon = status_icon(c.status)
                 sug = f'<br><span class="sug">→ {esc(c.suggestion)}</span>' if c.suggestion else ""
+                pname = plain_name(c.name)
+                tech = f'<br><span class="filename">{esc(c.name)}</span>' if pname != c.name else ""
                 check_rows += f"""
         <tr>
           <td>{icon}</td>
-          <td>{esc(c.name)}</td>
+          <td>{esc(pname)}{tech}</td>
           <td>{esc(c.message)}{sug}</td>
           <td style="text-align:right;font-weight:700">{c.score}/{c.max_score}</td>
         </tr>"""
@@ -1451,6 +1495,24 @@ def generate_html_report(
         tag_cls = "r" if i <= 3 else ("y" if i <= 6 else "g")
         pri = "Korkea" if i <= 3 else ("Keskitaso" if i <= 6 else "Matala")
         rec_items += f'<li><span class="tag {tag_cls}">{pri}</span> {esc(r)}</li>'
+
+    # AI:n kirjoittama yhteenveto (jos käytettävissä)
+    ai_summary_html = ""
+    if ai_summary:
+        paras = "".join(f"<p>{esc(p)}</p>" for p in ai_summary.split("\n") if p.strip())
+        ai_summary_html = f"""
+<div class="sec">
+  <div class="sec-t">Yhteenveto ja tärkeimmät toimenpiteet</div>
+  <div class="ai-recs">{paras}</div>
+</div>"""
+
+    # Sanasto selkokielisistä termeistä
+    glossary_rows = "".join(
+        f"<tr><td style='font-weight:600;color:#f1f5f9;white-space:nowrap'>{esc(pn)}</td>"
+        f"<td class='filename' style='vertical-align:middle'>{esc(tech)}</td>"
+        f"<td>{esc(expl)}</td></tr>"
+        for tech, (pn, expl) in PLAIN_FI.items()
+    )
 
     html = f"""<!DOCTYPE html>
 <html lang="fi"><head>
@@ -1538,6 +1600,21 @@ footer{{text-align:center;padding:32px;color:#334155;font-size:.72rem;border-top
 </div>
 
 <div class="sec">
+  <div class="sec-t">Mitä tämä raportti kertoo</div>
+  <div class="recs" style="line-height:1.7;font-size:.9rem;color:#cbd5e1">
+    <p>Tämä raportti arvioi, kuinka hyvin sivustosi löytyy Googlesta ja tekoälyhauista
+    (esimerkiksi ChatGPT ja Perplexity). Jokainen sivu on pisteytetty asteikolla 0–100
+    viidentoista tarkistuksen perusteella.</p>
+    <p style="margin-top:10px"><strong style="color:#4ade80">85–100</strong> = erinomaisessa kunnossa &nbsp;·&nbsp;
+    <strong style="color:#fbbf24">65–84</strong> = hyvä, pieniä parannuksia &nbsp;·&nbsp;
+    <strong style="color:#f87171">alle 65</strong> = vaatii toimenpiteitä</p>
+    <p style="margin-top:10px">Osa puutteista on korjattu automaattisesti tässä ajossa
+    (näkyvät sarakkeessa &quot;Korjaukset&quot;). Loput löytyvät kohdasta
+    &quot;Seuraavat toimenpiteet&quot; tärkeysjärjestyksessä.</p>
+  </div>
+</div>
+{ai_summary_html}
+<div class="sec">
   <div class="sec-t">Sivukohtainen yhteenveto</div>
   <table>
     <thead><tr>
@@ -1558,6 +1635,14 @@ footer{{text-align:center;padding:32px;color:#334155;font-size:.72rem;border-top
 <div class="sec">
   <div class="sec-t">Sivukohtaiset tarkistukset</div>
   {detail_sections}
+</div>
+
+<div class="sec">
+  <div class="sec-t">Sanasto — mitä tarkistukset tarkoittavat</div>
+  <table>
+    <thead><tr><th>Tarkistus</th><th>Tekninen termi</th><th>Selitys</th></tr></thead>
+    <tbody>{glossary_rows}</tbody>
+  </table>
 </div>
 
 <footer>
@@ -1586,6 +1671,7 @@ def save_reports(
     fixes: Dict[str, List[str]],
     site: SiteContext,
     out: Path,
+    ai_summary: str = "",
 ):
     ts_label = datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
     ts_file  = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1625,12 +1711,14 @@ def save_reports(
         },
         "fixes_applied": all_fixes,
         "recommendations": recommendations(all_checks),
+        "ai_summary": ai_summary or None,
         "ai_usage": COSTS.as_dict(),
     }, indent=2, ensure_ascii=False), encoding="utf-8")
 
     # Markdown
     md_path = out / f"audit_v3_{safe}_{ts_file}.md"
     recs = recommendations(all_checks)
+    md_esc = lambda t: str(t).replace("|", "\\|")
     lines = [f"# AEO/SEO Raportti v{VERSION} — {target}", "",
              f"**Päiväys:** {ts_label}  ",
              f"**Sivusto:** {site.name} ({site.url})  ",
@@ -1640,6 +1728,17 @@ def save_reports(
     for fname, chs in sorted(results.items()):
         p = score_pct(chs)
         lines.append(f"- **{fname}**: {p:.0f}/100 ({grade(p)})")
+    # Tarkistuskohtaiset taulukot sivuittain
+    for fname, chs in sorted(results.items()):
+        p = score_pct(chs)
+        lines += ["", f"### {fname} — {p:.0f}/100 ({grade(p)})", "",
+                  "| | Tarkistus | Pisteet | Tulos |",
+                  "|---|-----------|---------|-------|"]
+        for c in chs:
+            lines.append(f"| {ICONS.get(c.status, '?').strip()} | {md_esc(plain_name(c.name))} "
+                         f"| {c.score}/{c.max_score} | {md_esc(c.message)} |")
+    if ai_summary:
+        lines += ["", "## Yhteenveto ja tärkeimmät toimenpiteet", "", ai_summary]
     if all_fixes:
         lines += ["", "## Tehdyt korjaukset", ""]
         for f in all_fixes:
@@ -1651,7 +1750,7 @@ def save_reports(
     md_path.write_text("\n".join(lines), encoding="utf-8")
 
     # HTML
-    html_path = generate_html_report(results, site, before, fixes, out)
+    html_path = generate_html_report(results, site, before, fixes, out, ai_summary=ai_summary)
 
     if RICH:
         console.print(f"\n[bold green]Raportit tallennettu:[/bold green]")
@@ -1810,10 +1909,18 @@ def audit_repo(repo: Path, fix: bool, out: Path, site_args: SiteContext, open_re
             t.add_row(fname, f"[{c2}]{p:.0f}[/{c2}]", f"[{c2}]{g}[/{c2}]", icon)
         console.print(t)
 
+    # AI kirjoittaa selkokielisen yhteenvedon raporttiin
+    ai_summary = ""
+    if AI_AVAILABLE:
+        _info("AI kirjoittaa yhteenvetoa raporttiin...")
+        page_scores = {fname: int(score_pct(chs)) for fname, chs in results.items()}
+        ai_summary = AIWriter(site).strategic_recs(page_scores)
+
     html_report = save_reports(
         str(repo), "repo", results,
         before_results if fix else None,
-        fixes_applied, site, out
+        fixes_applied, site, out,
+        ai_summary=ai_summary,
     )
 
     _info(f"\n{COSTS.summary()}")
@@ -1900,9 +2007,16 @@ def audit_url(url: str, fix: bool, out: Path, site_args: SiteContext):
     else:
         results[fname] = before_checks
 
+    ai_summary = ""
+    if AI_AVAILABLE:
+        _info("AI kirjoittaa yhteenvetoa raporttiin...")
+        page_scores = {fname: int(score_pct(chs)) for fname, chs in results.items()}
+        ai_summary = AIWriter(site).strategic_recs(page_scores)
+
     save_reports(url, "url", results,
                  {fname: before_checks} if fix else None,
-                 fixes_applied, site, out)
+                 fixes_applied, site, out,
+                 ai_summary=ai_summary)
 
     _info(f"\n{COSTS.summary()}")
 
