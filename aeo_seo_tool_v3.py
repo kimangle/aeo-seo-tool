@@ -1,0 +1,1964 @@
+#!/usr/bin/env python3
+"""
+AEO/SEO Audit & Auto-Fix Tool v3.0
+=====================================
+Auditoi ja korjaa MINKÄ TAHANSA verkkosivuston SEO:n ja AEO:n.
+V3: Sivusto-agnostinen · 20 tarkistusta · HTML-raportti · Parempi AEO
+
+Käyttö:
+    python aeo_seo_tool_v3.py --repo /polku/sivustoon
+    python aeo_seo_tool_v3.py --repo . --fix
+    python aeo_seo_tool_v3.py --url https://example.com
+    python aeo_seo_tool_v3.py --repo . --fix --site-url https://example.com --site-name "Yritys"
+"""
+
+import sys, os, json, re, shutil, argparse, datetime
+import html as html_mod
+from pathlib import Path
+from urllib.parse import urlparse
+from typing import Dict, List, Optional, Tuple, Set
+from dataclasses import dataclass, field
+
+# ── Riippuvuudet ────────────────────────────────────────────────────────────
+
+MISSING = []
+try:
+    import requests
+    from bs4 import BeautifulSoup
+except ImportError as e:
+    MISSING.append(str(e).split("'")[1] if "'" in str(e) else str(e))
+
+try:
+    import anthropic
+    _ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+    # timeout + max_retries: SDK yrittää 429/5xx-virheet automaattisesti
+    # uudelleen eksponentiaalisella backoffilla
+    AI_CLIENT = anthropic.Anthropic(api_key=_ANTHROPIC_KEY, timeout=60.0, max_retries=3)
+    AI_AVAILABLE = bool(_ANTHROPIC_KEY)
+except ImportError:
+    AI_AVAILABLE = False
+
+try:
+    from rich.console import Console
+    from rich.table import Table
+    from rich.panel import Panel
+    from rich import box
+    RICH = True
+except ImportError:
+    RICH = False
+
+if MISSING:
+    print(f"Puuttuvat paketit: pip install {' '.join(MISSING)}")
+    sys.exit(1)
+
+console = Console() if RICH else None
+
+# ── Vakiot ──────────────────────────────────────────────────────────────────
+
+VERSION = "3.0"
+SKIP_DIRS: Set[str] = {
+    "node_modules", ".git", "vendor", "dist", "__pycache__",
+    "bower_components", ".cache", ".next", "build", "out", ".svn",
+}
+SOCIAL_DOMAINS = (
+    "facebook.com", "twitter.com", "x.com", "linkedin.com",
+    "instagram.com", "youtube.com", "tiktok.com", "pinterest.com",
+    "threads.net", "bsky.app",
+)
+
+# Google Site Verification -tiedostot (esim. google0fcfed6f5a2cbae1.html)
+GOOGLE_VERIFY_RE = re.compile(r"google[0-9a-f]{12,}\.html?$", re.I)
+
+ICONS  = {"pass": "✅", "warn": "⚠️ ", "fail": "❌"}
+COLORS = {"pass": "green", "warn": "yellow", "fail": "red"}
+
+# ── Tietorakenteet ──────────────────────────────────────────────────────────
+
+@dataclass
+class Check:
+    name: str
+    category: str
+    score: int
+    max_score: int
+    status: str        # pass / warn / fail
+    message: str
+    suggestion: str = ""
+    fix_snippet: str = ""
+    auto_fixable: bool = False
+
+@dataclass
+class SiteContext:
+    """Auto-havaittu tai CLI:stä annettu sivustotieto."""
+    name: str = ""
+    url: str = ""
+    email: str = ""
+    logo_url: str = ""
+    lang: str = "fi"
+
+    def is_complete(self) -> bool:
+        return bool(self.name and self.url)
+
+    def org_schema(self) -> dict:
+        d: dict = {
+            "@type": "Organization",
+            "@id": "#organization",
+            "name": self.name,
+            "url": self.url,
+        }
+        if self.email:
+            d["email"] = self.email
+        if self.logo_url:
+            d["logo"] = {"@type": "ImageObject", "url": self.logo_url}
+        return d
+
+    def website_schema(self) -> dict:
+        return {
+            "@type": "WebSite",
+            "@id": "#website",
+            "url": self.url,
+            "name": self.name,
+            "publisher": {"@id": "#organization"},
+        }
+
+# ── Sivustokontekstin tunnistus ──────────────────────────────────────────────
+
+def detect_site_context(soups: List["BeautifulSoup"], cli_url: str = "", cli_name: str = "", cli_email: str = "") -> SiteContext:
+    """Tunnistaa sivuston nimen, URL:n ja emailin olemassa olevasta HTML:stä."""
+    ctx = SiteContext(url=cli_url, name=cli_name, email=cli_email)
+
+    for soup in soups:
+        # 1. Etsi Organization/LocalBusiness JSON-LD:stä
+        for script in soup.find_all("script", type="application/ld+json"):
+            try:
+                data = json.loads(script.string or "{}")
+                items = data.get("@graph", [data]) if isinstance(data, dict) else (data if isinstance(data, list) else [data])
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    t = item.get("@type", "")
+                    if t in ("Organization", "LocalBusiness", "Corporation"):
+                        n = item.get("name", "")
+                        u = item.get("url", "")
+                        e = item.get("email", "")
+                        logo = item.get("logo", {})
+                        if isinstance(logo, dict):
+                            logo = logo.get("url", "")
+                        if n and n not in ("Yrityksesi nimi", "Sivuston nimi") and not ctx.name:
+                            ctx.name = n
+                        if u and u != "https://example.com" and not ctx.url:
+                            ctx.url = u
+                        if e and not ctx.email:
+                            ctx.email = e
+                        if logo and not ctx.logo_url:
+                            ctx.logo_url = logo
+            except Exception:
+                pass
+
+        # 2. OG-tagit
+        if not ctx.name:
+            site_name = soup.find("meta", property="og:site_name")
+            if site_name and site_name.get("content"):
+                ctx.name = site_name["content"]
+        if not ctx.url:
+            og_url = soup.find("meta", property="og:url")
+            if og_url and og_url.get("content") and og_url["content"] != "/":
+                parsed = urlparse(og_url["content"])
+                if parsed.scheme and parsed.netloc:
+                    ctx.url = f"{parsed.scheme}://{parsed.netloc}"
+
+        # 3. Canonical-tägi
+        if not ctx.url:
+            can = soup.find("link", rel="canonical")
+            if can and can.get("href") and can["href"] != "/":
+                parsed = urlparse(can["href"])
+                if parsed.scheme and parsed.netloc:
+                    ctx.url = f"{parsed.scheme}://{parsed.netloc}"
+
+        # 4. Title-tägi → brändinimi (" | " tai " - " jälkeinen osa)
+        if not ctx.name:
+            title = soup.find("title")
+            if title:
+                t = title.get_text(strip=True)
+                for sep in [" | ", " - ", " – ", " — "]:
+                    if sep in t:
+                        ctx.name = t.split(sep)[-1].strip()
+                        break
+
+        # 5. Email tekstistä tai mailto-linkeistä
+        if not ctx.email:
+            for a in soup.find_all("a", href=True):
+                if a["href"].startswith("mailto:"):
+                    ctx.email = a["href"][7:].split("?")[0].strip()
+                    break
+
+        # 6. Kieli
+        html_tag = soup.find("html")
+        if html_tag and html_tag.get("lang"):
+            ctx.lang = html_tag["lang"][:2]
+
+        if ctx.is_complete() and ctx.email:
+            break
+
+    # Logo-arvaus URL:sta
+    if ctx.url and not ctx.logo_url:
+        ctx.logo_url = ctx.url.rstrip("/") + "/logo.png"
+
+    return ctx
+
+# ── Kustannusseuranta ───────────────────────────────────────────────────────
+
+# Hinnat: USD / miljoona tokenia (input, output)
+MODEL_PRICES_USD = {
+    "claude-haiku-4-5-20251001": (1.00, 5.00),
+    "claude-haiku-4-5":          (1.00, 5.00),
+}
+DEFAULT_USD_EUR = 0.85  # ohitettavissa: --eur-rate tai AEO_USD_EUR
+
+
+class CostTracker:
+    """Kerää API-kutsujen tokenmäärät ja laskee kulut euroina."""
+
+    def __init__(self):
+        self.calls = 0
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.model = ""
+        try:
+            self.usd_eur = float(os.environ.get("AEO_USD_EUR", DEFAULT_USD_EUR))
+        except ValueError:
+            self.usd_eur = DEFAULT_USD_EUR
+
+    def record(self, model: str, usage):
+        self.calls += 1
+        self.model = model
+        self.input_tokens += getattr(usage, "input_tokens", 0) or 0
+        self.output_tokens += getattr(usage, "output_tokens", 0) or 0
+
+    def cost_eur(self) -> float:
+        p_in, p_out = MODEL_PRICES_USD.get(self.model, (1.00, 5.00))
+        usd = self.input_tokens / 1e6 * p_in + self.output_tokens / 1e6 * p_out
+        return usd * self.usd_eur
+
+    def summary(self) -> str:
+        if self.calls == 0:
+            return "AI-kulut: ei API-kutsuja tässä ajossa (0,00 €)"
+        eur = self.cost_eur()
+        eur_str = f"{eur:.2f}".replace(".", ",") if eur >= 0.005 else "alle 0,01"
+        fmt = lambda n: f"{n:,}".replace(",", " ")
+        rate = f"{self.usd_eur:.2f}".replace(".", ",")
+        return (f"AI-kulut: {self.calls} API-kutsua · "
+                f"{fmt(self.input_tokens)} input + {fmt(self.output_tokens)} output tokenia · "
+                f"~{eur_str} € (kurssi 1 $ = {rate} €)")
+
+    def as_dict(self) -> dict:
+        return {
+            "api_calls": self.calls,
+            "model": self.model or None,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "cost_eur": round(self.cost_eur(), 4),
+            "usd_eur_rate": self.usd_eur,
+        }
+
+
+COSTS = CostTracker()
+
+# ── AI-sisällöntuottaja ─────────────────────────────────────────────────────
+
+_AI_CONSECUTIVE_FAILURES = 0
+_AI_MAX_FAILURES = 3
+
+def _disable_ai(reason: str):
+    """Kytkee AI-ominaisuudet pois loppuajoksi, ettei sama virhe toistu joka sivulla."""
+    global AI_AVAILABLE
+    if AI_AVAILABLE:
+        AI_AVAILABLE = False
+        _warn(f"AI-ominaisuudet kytketty pois loppuajoksi: {reason}")
+
+
+class AIWriter:
+    """Sivusto-agnostinen AI-kirjoittaja. Käyttää sivun kontekstia oikean sisällön generointiin."""
+
+    MODEL = "claude-haiku-4-5-20251001"
+
+    def __init__(self, site: SiteContext):
+        self.site = site
+
+    @property
+    def available(self) -> bool:
+        return AI_AVAILABLE
+
+    def _ask(self, prompt: str, max_tokens: int = 800) -> str:
+        global _AI_CONSECUTIVE_FAILURES
+        if not AI_AVAILABLE:
+            return ""
+        try:
+            r = AI_CLIENT.messages.create(
+                model=self.MODEL,
+                max_tokens=max_tokens,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            _AI_CONSECUTIVE_FAILURES = 0
+            COSTS.record(self.MODEL, r.usage)
+            return next((b.text for b in r.content if b.type == "text"), "").strip()
+        except anthropic.AuthenticationError:
+            _disable_ai("API-avain on virheellinen tai vanhentunut — tarkista ANTHROPIC_API_KEY")
+            return ""
+        except anthropic.PermissionDeniedError:
+            _disable_ai("API-avaimella ei ole oikeutta käyttää mallia")
+            return ""
+        except anthropic.RateLimitError:
+            _warn("AI: käyttöraja täynnä, uudelleenyritykset eivät auttaneet — kohta ohitetaan")
+        except anthropic.APIConnectionError:
+            _warn("AI: verkkovirhe tai aikakatkaisu — kohta ohitetaan")
+        except anthropic.APIStatusError as e:
+            _warn(f"AI: API-virhe (HTTP {e.status_code}) — kohta ohitetaan")
+        _AI_CONSECUTIVE_FAILURES += 1
+        if _AI_CONSECUTIVE_FAILURES >= _AI_MAX_FAILURES:
+            _disable_ai(f"{_AI_MAX_FAILURES} peräkkäistä epäonnistunutta AI-kutsua")
+        return ""
+
+    def _site_ctx(self) -> str:
+        parts = []
+        if self.site.name:
+            parts.append(f"Yritys: {self.site.name}")
+        if self.site.url:
+            parts.append(f"Verkkosivusto: {self.site.url}")
+        if self.site.email:
+            parts.append(f"Sähköposti: {self.site.email}")
+        return "\n".join(parts)
+
+    def meta_description(self, title: str, body_text: str, url: str = "") -> str:
+        lang_instruction = "suomeksi" if self.site.lang == "fi" else f"kielellä {self.site.lang}"
+        prompt = f"""Kirjoita yksi SEO-optimoitu meta description {lang_instruction} tälle verkkosivulle.
+
+{self._site_ctx()}
+Sivun otsikko: {title}
+Sivun sisältö: {body_text[:500]}
+
+Vaatimukset:
+- Täsmälleen 140–155 merkkiä
+- Sisältää pääavainsanan luonnollisesti
+- Houkutteleva, selkeä arvolupaus
+- Ei lainausmerkkejä, ei HTML-tageja
+- Palauta VAIN meta description -teksti"""
+        result = self._ask(prompt, 120)
+        if result and 120 <= len(result) <= 165:
+            return result
+        return result[:155] if result else ""
+
+    def faq_items(self, title: str, body_text: str, page_type: str = "") -> List[Dict]:
+        lang_instruction = "suomeksi" if self.site.lang == "fi" else f"kielellä {self.site.lang}"
+        prompt = f"""Luo 5 usein kysyttyä kysymystä vastauksineen {lang_instruction} tälle verkkosivulle.
+
+{self._site_ctx()}
+Sivun otsikko: {title}
+Sivutyyppi: {page_type}
+Sivun sisältö: {body_text[:700]}
+
+Palauta VAIN JSON-taulukko (ei muuta tekstiä):
+[
+  {{"q": "Kysymys?", "a": "Vastaus vähintään 2 lausetta."}},
+  ...
+]"""
+        raw = self._ask(prompt, 700)
+        try:
+            match = re.search(r'\[.*\]', raw, re.DOTALL)
+            if match:
+                items = json.loads(match.group())
+                return [{"q": str(i.get("q", "")), "a": str(i.get("a", ""))}
+                        for i in items
+                        if isinstance(i, dict) and i.get("q") and i.get("a")]
+        except (json.JSONDecodeError, TypeError):
+            _warn("AI palautti virheellistä JSONia (FAQ) — kohta ohitetaan")
+        return []
+
+    def howto_steps(self, title: str, body_text: str) -> List[Dict]:
+        lang_instruction = "suomeksi" if self.site.lang == "fi" else f"kielellä {self.site.lang}"
+        prompt = f"""Luo 4–5 selkeää HowTo-askelta {lang_instruction} tälle prosessisivulle.
+
+{self._site_ctx()}
+Sivun otsikko: {title}
+Sisältö: {body_text[:500]}
+
+Palauta VAIN JSON-taulukko:
+[
+  {{"name": "Askeleen nimi", "text": "Tarkempi kuvaus."}},
+  ...
+]"""
+        raw = self._ask(prompt, 500)
+        try:
+            match = re.search(r'\[.*\]', raw, re.DOTALL)
+            if match:
+                items = json.loads(match.group())
+                return [i for i in items
+                        if isinstance(i, dict) and i.get("name") and i.get("text")]
+        except (json.JSONDecodeError, TypeError):
+            _warn("AI palautti virheellistä JSONia (HowTo) — kohta ohitetaan")
+        return []
+
+    def page_schema_type(self, title: str, body_text: str, filename: str) -> str:
+        fname = filename.lower()
+        kw_map = {
+            "FAQPage":     ("ukk", "faq", "kysymys", "question"),
+            "HowTo":       ("miten", "how", "opas", "guide", "prosessi", "vaihe"),
+            "Service":     ("palvelu", "service", "hinta", "price", "paketti"),
+            "ContactPage": ("yhteystiedot", "contact", "yhteys", "ota-yhteyttä"),
+            "AboutPage":   ("meistä", "about", "yritys", "tietoa-meistä"),
+        }
+        for schema, keywords in kw_map.items():
+            if any(k in fname for k in keywords):
+                return schema
+        # Otsikosta/tekstistä vain täsmälliset avainsanat — löyhät osumat
+        # (esim. "yhteyshenkilö" → "yhteys") tuottivat vääriä skeematyyppejä
+        body_kw_map = {
+            "FAQPage":     ("usein kysytty", "ukk", "faq"),
+            "HowTo":       ("näin se toimii", "vaihe vaiheelta", "step by step"),
+            "ContactPage": ("yhteystiedot", "ota yhteyttä", "contact us"),
+            "AboutPage":   ("tietoa meistä", "about us"),
+        }
+        combined = (title + " " + body_text[:200]).lower()
+        for schema, keywords in body_kw_map.items():
+            if any(k in combined for k in keywords):
+                return schema
+        return "WebPage"
+
+    def strategic_recs(self, page_scores: Dict[str, int]) -> str:
+        """Generoi strategisia AEO/SEO-suosituksia koko sivustolle."""
+        if not self.available:
+            return ""
+        low = [f"{p}: {s}/100" for p, s in page_scores.items() if s < 80]
+        if not low:
+            return ""
+        prompt = f"""Olet kokenut SEO/AEO-konsultti. Tee lyhyt strateginen yhteenveto {self.site.name or 'sivuston'} tilanteesta.
+
+Sivut alle 80 pistettä: {', '.join(low) if low else 'kaikki yli 80'}
+Sivusto: {self.site.url}
+
+Kirjoita 3–4 konkreettista, prioriteetin mukaan järjestettyä toimenpidettä. Pidä tiiviinä. Vastaa suomeksi."""
+        return self._ask(prompt, 300)
+
+
+# ── Auditoija ───────────────────────────────────────────────────────────────
+
+class PageAuditor:
+    """20-tarkistuksen SEO/AEO-auditoija. Toimii mille tahansa HTML-sivulle."""
+
+    SCORING = {
+        # Tekninen SEO
+        "title": 10, "meta_desc": 10, "canonical": 5, "robots_meta": 2, "lang_attr": 1,
+        # Sivun rakenne
+        "h1": 8, "heading_hierarchy": 5, "images_alt": 5,
+        # Sosiaalinen SEO
+        "open_graph": 8, "twitter_card": 4,
+        # AEO & Structured Data
+        "jsonld_present": 4, "schema_types": 7, "faq_schema": 7, "aeo_content": 8,
+        # Luottamus & laatu
+        "authority": 7, "content_quality": 7,
+        # Rakenne
+        "internal_links": 2,
+    }
+    # Total = 100
+
+    def __init__(self, html: str, url: str = "", file_path: str = "", site: Optional[SiteContext] = None):
+        parser = "lxml" if _has_lxml() else "html.parser"
+        self.soup = BeautifulSoup(html, parser)
+        self.url = url
+        self.file_path = file_path
+        self.site = site or SiteContext()
+        self.checks: List[Check] = []
+        self._body_text = self.soup.get_text(" ", strip=True)
+        self._words = self._body_text.split()
+
+    def run(self) -> List[Check]:
+        self._title()
+        self._meta_desc()
+        self._canonical()
+        self._robots_meta()
+        self._lang_attr()
+        self._h1()
+        self._heading_hierarchy()
+        self._images_alt()
+        self._open_graph()
+        self._twitter_card()
+        self._json_ld()
+        self._aeo_content()
+        self._authority()
+        self._content_quality()
+        self._internal_links()
+        return self.checks
+
+    # ── Tekninen SEO ──
+
+    def _title(self):
+        m = self.SCORING["title"]
+        tag = self.soup.find("title")
+        if not tag or not tag.get_text(strip=True):
+            self.checks.append(Check("Title-tägi", "Tekninen SEO", 0, m, "fail",
+                "Title puuttuu", "Lisää <title>Sivun nimi | Brändi</title>",
+                "<title>Sivun nimi | Brändi</title>"))
+            return
+        t = tag.get_text(strip=True)
+        ln = len(t)
+        if 30 <= ln <= 60:
+            self.checks.append(Check("Title-tägi", "Tekninen SEO", m, m, "pass",
+                f'"{_trunc(t, 52)}" ({ln} merkkiä)'))
+        elif ln < 30:
+            self.checks.append(Check("Title-tägi", "Tekninen SEO", m // 2, m, "warn",
+                f"Liian lyhyt ({ln} mk): \"{t}\"",
+                "Laajenna 30–60 merkkiin, lisää avainsana"))
+        else:
+            self.checks.append(Check("Title-tägi", "Tekninen SEO", m - 3, m, "warn",
+                f"Liian pitkä ({ln} mk) — Google katkaisee 60 mk kohdalta",
+                "Lyhennä alle 60 merkkiin"))
+
+    def _meta_desc(self):
+        m = self.SCORING["meta_desc"]
+        tag = self.soup.find("meta", attrs={"name": "description"})
+        if not tag or not (tag.get("content") or "").strip():
+            self.checks.append(Check("Meta Description", "Tekninen SEO", 0, m, "fail",
+                "Meta description puuttuu",
+                "AI kirjoittaa sen automaattisesti --fix-lipulla", "", auto_fixable=True))
+            return
+        t = tag["content"].strip()
+        ln = len(t)
+        is_placeholder = any(p in t.lower() for p in
+            ["kuvaile sivusi", "120–160", "placeholder", "yrityksesi", "example"])
+        if is_placeholder:
+            self.checks.append(Check("Meta Description", "Tekninen SEO", m // 3, m, "warn",
+                f"Placeholder-teksti ({ln} mk)",
+                "AI kirjoittaa oikean sisällön --fix-lipulla", "", auto_fixable=True))
+        elif 120 <= ln <= 160:
+            self.checks.append(Check("Meta Description", "Tekninen SEO", m, m, "pass",
+                f"Optimaalinen ({ln} merkkiä)"))
+        elif ln < 120:
+            self.checks.append(Check("Meta Description", "Tekninen SEO", m // 2, m, "warn",
+                f"Liian lyhyt ({ln} mk) — tavoite 120–160",
+                "AI parantaa --fix-lipulla", "", auto_fixable=True))
+        else:
+            self.checks.append(Check("Meta Description", "Tekninen SEO", m - 2, m, "warn",
+                f"Liian pitkä ({ln} mk)", "Lyhennä alle 160 merkkiin"))
+
+    def _canonical(self):
+        m = self.SCORING["canonical"]
+        tag = self.soup.find("link", rel="canonical")
+        if tag and tag.get("href") and tag["href"] not in ("/", "", None):
+            href = tag["href"]
+            # Tarkista onko absoluuttinen URL
+            if href.startswith("http"):
+                self.checks.append(Check("Canonical-tägi", "Tekninen SEO", m, m, "pass", href))
+            else:
+                self.checks.append(Check("Canonical-tägi", "Tekninen SEO", m - 1, m, "warn",
+                    f"Suhteellinen URL: {href}", "Käytä absoluuttista URL:a"))
+        else:
+            page_url = self.url or (self.site.url + "/" if self.site.url else "")
+            self.checks.append(Check("Canonical-tägi", "Tekninen SEO", 0, m, "warn",
+                "Canonical puuttuu tai on virheellinen",
+                "Lisää canonical", f'<link rel="canonical" href="{page_url}">', auto_fixable=True))
+
+    def _robots_meta(self):
+        m = self.SCORING["robots_meta"]
+        tag = self.soup.find("meta", attrs={"name": "robots"})
+        if tag:
+            c = (tag.get("content") or "").lower()
+            if "noindex" in c:
+                self.checks.append(Check("Robots Meta", "Tekninen SEO", 0, m, "fail",
+                    f"VAROITUS: noindex asetettu! ({c})", "Poista noindex tai muuta index,follow"))
+            else:
+                self.checks.append(Check("Robots Meta", "Tekninen SEO", m, m, "pass", c))
+        else:
+            self.checks.append(Check("Robots Meta", "Tekninen SEO", m - 1, m, "pass",
+                "Puuttuu — oletus index,follow on OK"))
+
+    def _lang_attr(self):
+        m = self.SCORING["lang_attr"]
+        html_tag = self.soup.find("html")
+        if html_tag and html_tag.get("lang"):
+            lang = html_tag["lang"]
+            self.checks.append(Check("HTML lang-attribuutti", "Tekninen SEO", m, m, "pass",
+                f'lang="{lang}" — hakukoneet tietävät kielen'))
+        else:
+            self.checks.append(Check("HTML lang-attribuutti", "Tekninen SEO", 0, m, "warn",
+                "lang-attribuutti puuttuu <html>-tagista",
+                'Lisää: <html lang="fi">',
+                '<html lang="fi">', auto_fixable=True))
+
+    # ── Sivun rakenne ──
+
+    def _h1(self):
+        m = self.SCORING["h1"]
+        h1s = self.soup.find_all("h1")
+        if not h1s:
+            self.checks.append(Check("H1-otsikko", "Sivun rakenne", 0, m, "fail",
+                "H1 puuttuu", "Lisää yksi H1-otsikko sivulle", "<h1>Sivun pääotsikko</h1>"))
+        elif len(h1s) == 1:
+            txt = h1s[0].get_text(strip=True)
+            self.checks.append(Check("H1-otsikko", "Sivun rakenne", m, m, "pass",
+                f'"{_trunc(txt, 55)}"'))
+        else:
+            self.checks.append(Check("H1-otsikko", "Sivun rakenne", m // 2, m, "warn",
+                f"{len(h1s)} H1-otsikkoa — suositellaan yhtä", "Jätä vain yksi H1 per sivu"))
+
+    def _heading_hierarchy(self):
+        m = self.SCORING["heading_hierarchy"]
+        levels = []
+        for lv in range(1, 7):
+            for _ in self.soup.find_all(f"h{lv}"):
+                levels.append(lv)
+        if not levels:
+            self.checks.append(Check("Otsikkorakenne", "Sivun rakenne", 0, m, "fail",
+                "Ei otsikoita lainkaan"))
+            return
+        issues = []
+        prev = 0
+        for lv in levels:
+            if prev and lv > prev + 1:
+                issues.append(f"H{prev}→H{lv}")
+            prev = lv
+        if not issues:
+            self.checks.append(Check("Otsikkorakenne", "Sivun rakenne", m, m, "pass",
+                f"Looginen rakenne ({len(levels)} otsikkoa)"))
+        else:
+            deduct = min(len(issues) * 2, m)
+            self.checks.append(Check("Otsikkorakenne", "Sivun rakenne", max(0, m - deduct), m, "warn",
+                f"Tasoaukkoja: {', '.join(issues[:3])}",
+                "Korjaa otsikkohierarkia — ei H2→H4 hyppyjä"))
+
+    def _images_alt(self):
+        m = self.SCORING["images_alt"]
+        imgs = self.soup.find_all("img")
+        if not imgs:
+            self.checks.append(Check("Kuvien alt-tekstit", "Sivun rakenne", m, m, "pass",
+                "Ei kuvia sivulla"))
+            return
+        no_alt = [i for i in imgs if i.get("alt") is None]
+        empty_alt = [i for i in imgs if i.get("alt") == ""]  # Decorative = OK
+        bad_alt = [i for i in imgs if i.get("alt") in ("image", "photo", "kuva", "img")]
+        problems = no_alt + bad_alt
+        if not problems:
+            self.checks.append(Check("Kuvien alt-tekstit", "Sivun rakenne", m, m, "pass",
+                f"Kaikilla {len(imgs)} kuvalla alt-teksti"))
+        else:
+            score = round(m * (len(imgs) - len(problems)) / len(imgs))
+            self.checks.append(Check("Kuvien alt-tekstit", "Sivun rakenne", score, m,
+                "fail" if score == 0 else "warn",
+                f"{len(problems)}/{len(imgs)} kuvalta puuttuu/heikko alt-teksti",
+                "Lisää kuvaava alt-teksti jokaiselle sisältökuvalle"))
+
+    # ── Sosiaalinen SEO ──
+
+    def _open_graph(self):
+        m = self.SCORING["open_graph"]
+        required = ["og:title", "og:description", "og:image", "og:url"]
+        found, broken = [], []
+        for p in required:
+            tag = self.soup.find("meta", property=p)
+            if tag and (tag.get("content") or "").strip() not in ("", "/", None):
+                found.append(p)
+            elif tag:
+                broken.append(p)
+        missing = [p for p in required if p not in found]
+        if not missing:
+            self.checks.append(Check("Open Graph", "Sosiaalinen SEO", m, m, "pass",
+                "Kaikki OG-tagit kunnossa"))
+        else:
+            score = round(m * len(found) / len(required))
+            snippet = "\n".join(f'<meta property="{p}" content="...">' for p in missing)
+            self.checks.append(Check("Open Graph", "Sosiaalinen SEO", score, m,
+                "fail" if score == 0 else "warn",
+                f"Puuttuu: {', '.join(missing)}",
+                "Lisää puuttuvat OG-tagit", snippet, auto_fixable=True))
+
+    def _twitter_card(self):
+        m = self.SCORING["twitter_card"]
+        card = self.soup.find("meta", attrs={"name": "twitter:card"})
+        img  = self.soup.find("meta", attrs={"name": "twitter:image"})
+        if card and (card.get("content") or "") and img and (img.get("content") or ""):
+            self.checks.append(Check("Twitter/X Card", "Sosiaalinen SEO", m, m, "pass",
+                "Twitter Card + kuva kunnossa"))
+        elif card and (card.get("content") or ""):
+            self.checks.append(Check("Twitter/X Card", "Sosiaalinen SEO", m - 2, m, "warn",
+                "Twitter Card OK — twitter:image puuttuu",
+                'Lisää <meta name="twitter:image" content="...">',
+                '', auto_fixable=True))
+        else:
+            self.checks.append(Check("Twitter/X Card", "Sosiaalinen SEO", 0, m, "warn",
+                "Twitter Card puuttuu",
+                "Lisää Twitter Card -metatagit", "", auto_fixable=True))
+
+    # ── AEO & Structured Data ──
+
+    def _json_ld(self):
+        mp = self.SCORING["jsonld_present"]
+        ms = self.SCORING["schema_types"]
+        mf = self.SCORING["faq_schema"]
+        total_max = mp + ms + mf
+
+        scripts = self.soup.find_all("script", type="application/ld+json")
+        if not scripts:
+            self.checks.append(Check("JSON-LD / Structured Data", "AEO & Structured Data",
+                0, total_max, "fail", "JSON-LD puuttuu kokonaan",
+                "AI generoi oikean JSON-LD:n --fix-lipulla", "", auto_fixable=True))
+            return
+
+        schemas, parse_errors = [], 0
+        for s in scripts:
+            try:
+                d = json.loads(s.string or "{}")
+                if isinstance(d, dict) and "@graph" in d:
+                    schemas.extend(d["@graph"])
+                elif isinstance(d, dict):
+                    schemas.append(d)
+                elif isinstance(d, list):
+                    schemas.extend(d)
+            except Exception:
+                parse_errors += 1
+
+        types = [str(s.get("@type", "")) for s in schemas if isinstance(s, dict)]
+
+        has_org  = any(t in ("Organization", "LocalBusiness", "Corporation", "Store") for t in types)
+        has_site = "WebSite" in types
+        has_page = any(t in ("WebPage", "Article", "BlogPosting", "Product",
+                             "Service", "FAQPage", "HowTo", "ContactPage",
+                             "AboutPage", "CollectionPage") for t in types)
+        has_faq  = any(t in ("FAQPage", "HowTo") for t in types)
+
+        # Tarkista placeholders
+        placeholders = {"Yrityksesi nimi", "Sivuston nimi", "Your Company"}
+        has_placeholder = any(
+            isinstance(s, dict) and (s.get("name") in placeholders or s.get("url") == "https://example.com")
+            for s in schemas
+        )
+
+        # Tarkista FAQPage rakenne
+        faq_quality = 0
+        for s in schemas:
+            if not isinstance(s, dict):
+                continue
+            if s.get("@type") == "FAQPage":
+                entities = s.get("mainEntity", [])
+                if isinstance(entities, list) and len(entities) >= 3:
+                    faq_quality = mf
+                elif isinstance(entities, list) and len(entities) >= 1:
+                    faq_quality = mf // 2
+            elif s.get("@type") == "HowTo":
+                steps = s.get("step", [])
+                if isinstance(steps, list) and len(steps) >= 3:
+                    faq_quality = mf
+                elif isinstance(steps, list) and len(steps) >= 1:
+                    faq_quality = mf // 2
+
+        sp = mp  # JSON-LD exists
+        ss = min(ms, (3 if has_org else 0) + (2 if has_site else 0) + (2 if has_page else 0))
+        if has_placeholder:
+            ss = max(0, ss - 2)
+        sf = faq_quality
+
+        total = sp + ss + sf
+        status = "pass" if total >= total_max * 0.7 else ("warn" if total > 0 else "fail")
+        type_str = ", ".join(t for t in sorted(set(types)) if t) or "tuntematon"
+
+        notes = []
+        if has_placeholder:
+            notes.append("Placeholder-arvoja — AI korjaa --fix-lipulla")
+        if not has_faq:
+            notes.append("FAQPage/HowTo puuttuu — lisää AEO:ta varten")
+        if parse_errors:
+            notes.append(f"{parse_errors} JSON-LD syntaksivirhe")
+
+        self.checks.append(Check("JSON-LD / Structured Data", "AEO & Structured Data",
+            total, total_max, status,
+            f"Skeematyypit: {_trunc(type_str, 50)}",
+            " | ".join(notes) if notes else "",
+            "", auto_fixable=has_placeholder or not has_faq))
+
+    def _aeo_content(self):
+        m = self.SCORING["aeo_content"]
+        score = 0
+        notes = []
+        issues = []
+        body = self._body_text
+        word_count = len(self._words)
+
+        # 1. Kysymyksiä HTML:ssä (laaja havaitseminen)
+        q_patterns = [
+            r"[A-ZÄÖÅ][^.!?]{8,}\?",            # Iso alkukirjain + ?
+            r"\b(Mik[äa]|Miten|Kuinka|Onko|Voiko|Mistä|Kenelle|Milloin)\b[^?]{5,}\?",
+        ]
+        qs: Set[str] = set()
+        for pat in q_patterns:
+            qs.update(re.findall(pat, body))
+
+        # 2. Q&A JSON-LD:ssä (laskee myös AEO:ta varten)
+        faq_q_count = 0
+        for script in self.soup.find_all("script", type="application/ld+json"):
+            try:
+                d = json.loads(script.string or "{}")
+                items = d.get("@graph", [d]) if isinstance(d, dict) else [d]
+                for item in (items if isinstance(items, list) else [items]):
+                    if isinstance(item, dict) and item.get("@type") == "FAQPage":
+                        entities = item.get("mainEntity", [])
+                        faq_q_count += len(entities) if isinstance(entities, list) else 0
+            except Exception:
+                pass
+
+        total_qs = len(qs) + faq_q_count
+        if total_qs >= 4:
+            score += 3; notes.append(f"{total_qs} Q&A")
+        elif total_qs >= 2:
+            score += 2; notes.append(f"{total_qs} kysymystä")
+        else:
+            issues.append("Lisää Q&A-sisältöä tai FAQPage-skeema")
+
+        # 3. Listat (ul/ol) + taulukot
+        lists = self.soup.find_all(["ul", "ol", "table"])
+        if len(lists) >= 2:
+            score += 2; notes.append(f"{len(lists)} listaa/taulukkoa")
+        elif lists:
+            score += 1; notes.append(f"{len(lists)} lista")
+        else:
+            issues.append("Lisää listoja tai taulukoita")
+
+        # 4. Sanamäärä
+        if word_count >= 400:
+            score += 3; notes.append(f"{word_count} sanaa")
+        elif word_count >= 150:
+            score += 1; issues.append(f"Lisää tekstiä (nyt {word_count} sanaa)")
+        else:
+            issues.append(f"Hyvin vähän tekstiä ({word_count} sanaa)")
+
+        status = "pass" if score >= m * 0.7 else ("warn" if score > 0 else "fail")
+        self.checks.append(Check("AEO-sisältösignaalit", "AEO & Structured Data",
+            min(score, m), m, status,
+            ", ".join(notes) if notes else "heikot signaalit",
+            " | ".join(issues) if issues else ""))
+
+    # ── Luottamus & laatu ──
+
+    def _authority(self):
+        m = self.SCORING["authority"]
+        score = 0
+        found = []
+        missing = []
+        body = self._body_text
+        all_a = self.soup.find_all("a", href=True)
+        hrefs = [a["href"].lower() for a in all_a]
+        texts = [a.get_text(strip=True).lower() for a in all_a]
+        nav = hrefs + texts
+
+        # Email (2 pts)
+        if re.search(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", body) or \
+           any(h.startswith("mailto:") for h in hrefs):
+            score += 2; found.append("sähköposti")
+        else:
+            missing.append("sähköpostiosoite")
+
+        # Puhelin (1 pt) — laaja havaitseminen
+        phone_patterns = [
+            r"\+[\d\s\-]{8,15}",          # +358 xx xxx xxxx
+            r"0\d{2}[\s\-]?\d{3}[\s\-]?\d{4}",  # 040 123 4567
+            r"tel:",                        # tel: linkit
+        ]
+        if any(re.search(p, body, re.I) for p in phone_patterns) or \
+           any(h.startswith("tel:") for h in hrefs):
+            score += 1; found.append("puhelin")
+        else:
+            missing.append("puhelinnumero")
+
+        # Tietosuoja/privacy (2 pts)
+        privacy_kw = ("tietosuoja", "privacy", "gdpr", "tietosuojaseloste", "cookie")
+        if any(any(k in n for k in privacy_kw) for n in nav):
+            score += 2; found.append("tietosuoja")
+        else:
+            missing.append("tietosuojasivu")
+
+        # Tietoa meistä / About (1 pt)
+        about_kw = ("meistä", "about", "yritys", "tietoa", "tiimi", "team")
+        if any(any(k in n for k in about_kw) for n in nav):
+            score += 1; found.append("tietoa meistä")
+        else:
+            missing.append("tietoa meistä")
+
+        # Some-linkit (1 pt) — useampia alustoja
+        if any(any(s in h for s in SOCIAL_DOMAINS) for h in hrefs):
+            score += 1; found.append("some-linkit")
+        else:
+            missing.append("some-linkit")
+
+        status = "pass" if score >= m * 0.6 else ("warn" if score > 0 else "fail")
+        self.checks.append(Check("Auktoriteetti & luottamus", "Luottamus",
+            min(score, m), m, status,
+            f"Löytyi: {', '.join(found) if found else '–'}",
+            f"Puuttuu: {', '.join(missing)}" if missing else ""))
+
+    def _content_quality(self):
+        m = self.SCORING["content_quality"]
+
+        # Paras kappale (ei ensimmäinen — se voi olla nav)
+        paragraphs = self.soup.find_all("p")
+        content_ps = [p for p in paragraphs
+                     if len(p.get_text(strip=True).split()) >= 10
+                     and not p.find_parent(["nav", "header"])]
+        best_p_words = max((len(p.get_text(strip=True).split()) for p in content_ps), default=0)
+
+        word_count = len(self._words)
+        has_strong_para = best_p_words >= 25
+
+        # CTA-tarkistus
+        cta_kw = ("varaa", "osta", "tilaa", "lataa", "aloita", "kokeile",
+                  "contact", "book", "buy", "start", "download", "learn more")
+        has_cta = any(any(k in a.get_text(strip=True).lower() for k in cta_kw)
+                     for a in self.soup.find_all("a"))
+
+        score = 0
+        notes = []
+        if has_strong_para:
+            score += 3; notes.append("vahva arvolupaus")
+        else:
+            notes.append("arvolupaus epäselvä")
+
+        if word_count >= 500:
+            score += 3; notes.append(f"{word_count} sanaa")
+        elif word_count >= 200:
+            score += 2; notes.append(f"{word_count} sanaa")
+        else:
+            notes.append(f"vain {word_count} sanaa")
+
+        if has_cta:
+            score += 1; notes.append("CTA löytyy")
+
+        status = "pass" if score >= m * 0.6 else ("warn" if score > 0 else "fail")
+        self.checks.append(Check("Sisällön laatu", "Luottamus", min(score, m), m, status,
+            ", ".join(notes),
+            "" if score >= m * 0.6 else "Kirjoita vahva arvolupaus (yli 25 sanaa kappaleessa)"))
+
+    def _internal_links(self):
+        m = self.SCORING["internal_links"]
+        all_a = self.soup.find_all("a", href=True)
+        base = urlparse(self.site.url).netloc if self.site.url else ""
+
+        internal = []
+        for a in all_a:
+            href = a["href"]
+            if href.startswith("/") and not href.startswith("//"):
+                internal.append(href)
+            elif base and base in href:
+                internal.append(href)
+            elif href.endswith(".html") and not href.startswith("http"):
+                internal.append(href)
+
+        # Poista navigaatioduplikaatit (rough)
+        unique = list(set(internal))
+
+        if len(unique) >= 3:
+            self.checks.append(Check("Sisäiset linkit", "Rakenne", m, m, "pass",
+                f"{len(unique)} sisäistä linkkiä"))
+        elif len(unique) >= 1:
+            self.checks.append(Check("Sisäiset linkit", "Rakenne", m - 1, m, "warn",
+                f"Vain {len(unique)} sisäistä linkkiä",
+                "Lisää linkkejä muille omille sivuille — parantaa crawlausta"))
+        else:
+            self.checks.append(Check("Sisäiset linkit", "Rakenne", 0, m, "warn",
+                "Ei sisäisiä linkkejä havaittu",
+                "Lisää linkkejä muille sivuille"))
+
+
+# ── AI-korjaaja ─────────────────────────────────────────────────────────────
+
+class AIFixer:
+    """Sivusto-agnostinen AI-korjaaja. Käyttää SiteContext-tietoja."""
+
+    def __init__(self, html: str, url: str = "", filename: str = "", site: Optional[SiteContext] = None):
+        parser = "lxml" if _has_lxml() else "html.parser"
+        self.soup = BeautifulSoup(html, parser)
+        self.url = url
+        self.filename = filename
+        self.site = site or SiteContext()
+        self.applied: List[str] = []
+        self._body_text = self.soup.get_text(" ", strip=True)
+        title_tag = self.soup.find("title")
+        self._title_text = title_tag.get_text(strip=True) if title_tag else ""
+
+    def fix(self, checks: List[Check]) -> str:
+        head = self.soup.find("head")
+        if not head:
+            return str(self.soup)
+        for c in checks:
+            if c.auto_fixable and c.status != "pass":
+                self._apply(c, head)
+        return str(self.soup)
+
+    def _apply(self, c: Check, head):
+        dispatch = {
+            "Meta Description":            self._fix_meta_desc,
+            "Open Graph":                  lambda h: self._fix_og(h),
+            "Twitter/X Card":              lambda h: self._fix_twitter(h),
+            "Canonical-tägi":              lambda h: self._fix_canonical(h),
+            "JSON-LD / Structured Data":   lambda h: self._fix_jsonld(h),
+            "HTML lang-attribuutti":       lambda h: self._fix_lang(),
+        }
+        fn = dispatch.get(c.name)
+        if fn:
+            try:
+                fn(head)
+            except Exception as e:
+                _warn(f"  Korjausvirhe ({c.name}): {e}")
+
+    def _fix_lang(self):
+        html_tag = self.soup.find("html")
+        if html_tag and not html_tag.get("lang"):
+            html_tag["lang"] = self.site.lang or "fi"
+            self.applied.append(f"lang-attribuutti lisätty: {self.site.lang or 'fi'}")
+
+    def _fix_meta_desc(self, head):
+        if not AI_AVAILABLE:
+            return
+        writer = AIWriter(self.site)
+        _info("  AI kirjoittaa meta descriptionia...")
+        new_desc = writer.meta_description(self._title_text, self._body_text, self.url)
+        if not new_desc:
+            return
+        existing = self.soup.find("meta", attrs={"name": "description"})
+        if existing:
+            existing["content"] = new_desc
+        else:
+            t = self.soup.new_tag("meta", attrs={"name": "description", "content": new_desc})
+            head.append(t)
+        self.applied.append(f"Meta description kirjoitettu AI:lla ({len(new_desc)} mk)")
+
+    def _fix_og(self, head):
+        page_url = self._page_url()
+        title = self._title_text or self.site.name
+        desc_tag = self.soup.find("meta", attrs={"name": "description"})
+        desc = (desc_tag.get("content") or "") if desc_tag else ""
+        image = self.site.logo_url or (self.site.url.rstrip("/") + "/logo.png" if self.site.url else "")
+
+        props = {
+            "og:title":       title,
+            "og:description": desc,
+            "og:type":        "website",
+            "og:url":         page_url,
+            "og:image":       image,
+            "og:locale":      "fi_FI" if self.site.lang == "fi" else self.site.lang,
+        }
+        added = []
+        for prop, val in props.items():
+            if not val:
+                continue
+            existing = self.soup.find("meta", property=prop)
+            if not existing:
+                t = self.soup.new_tag("meta")
+                t["property"] = prop
+                t["content"] = val
+                head.append(t)
+                added.append(prop)
+            elif (existing.get("content") or "") in ("/", "", None):
+                existing["content"] = val
+                added.append(f"{prop}✎")
+        if added:
+            self.applied.append(f"OG-tagit: {', '.join(added)}")
+
+    def _fix_twitter(self, head):
+        title = self._title_text or self.site.name
+        desc_tag = self.soup.find("meta", attrs={"name": "description"})
+        desc = (desc_tag.get("content") or "")[:200] if desc_tag else ""
+        image = self.site.logo_url or ""
+
+        added = []
+        for name, content in [
+            ("twitter:card",        "summary_large_image"),
+            ("twitter:title",       title),
+            ("twitter:description", desc),
+            ("twitter:image",       image),
+        ]:
+            if not content:
+                continue
+            if not self.soup.find("meta", attrs={"name": name}):
+                t = self.soup.new_tag("meta")
+                t["name"] = name
+                t["content"] = content
+                head.append(t)
+                added.append(name)
+        if added:
+            self.applied.append(f"Twitter Card -tagit lisätty: {', '.join(added)}")
+
+    def _fix_canonical(self, head):
+        page_url = self._page_url()
+        existing = self.soup.find("link", rel="canonical")
+        if not existing:
+            t = self.soup.new_tag("link")
+            t["rel"] = "canonical"
+            t["href"] = page_url
+            head.append(t)
+            self.applied.append(f"Canonical lisätty: {page_url}")
+        elif (existing.get("href") or "") in ("/", "", None):
+            existing["href"] = page_url
+            self.applied.append(f"Canonical korjattu: {page_url}")
+
+    def _fix_jsonld(self, head):
+        # Idempotenssi: jos työkalu on jo generoinut skeeman tälle sivulle
+        # eikä sivulla ole enää placeholder-dataa, ei tehdä mitään.
+        if self.soup.find("script", attrs={"data-aeo-tool": True}):
+            return
+
+        writer = AIWriter(self.site)
+        schema_type = writer.page_schema_type(self._title_text, self._body_text, self.filename)
+
+        # Jos sivulla on jo aito (ei-placeholder) Organization/WebSite-skeema,
+        # ei lisätä duplikaattia — @id-viittaus toimii saman dokumentin sisällä.
+        existing_types: Set[str] = set()
+        for old in self.soup.find_all("script", type="application/ld+json"):
+            try:
+                d = json.loads(old.string or "{}")
+                items = d.get("@graph", [d]) if isinstance(d, dict) else (d if isinstance(d, list) else [d])
+                for item in items:
+                    if isinstance(item, dict) and item.get("name") not in ("Yrityksesi nimi", "Sivuston nimi", "Your Company"):
+                        existing_types.add(str(item.get("@type", "")))
+            except Exception:
+                pass
+
+        page_has_org = bool(existing_types & {"Organization", "LocalBusiness", "Corporation"})
+        has_org = self.site.is_complete() or page_has_org
+        graph = []
+
+        if self.site.is_complete() and not page_has_org:
+            graph.append(self.site.org_schema())
+            if "WebSite" not in existing_types:
+                graph.append(self.site.website_schema())
+
+        if schema_type == "FAQPage":
+            _info("  AI generoi FAQ-pareja...")
+            items = writer.faq_items(self._title_text, self._body_text, "FAQ")
+            if items:
+                graph.append({
+                    "@type": "FAQPage",
+                    "mainEntity": [
+                        {"@type": "Question", "name": i["q"],
+                         "acceptedAnswer": {"@type": "Answer", "text": i["a"]}}
+                        for i in items
+                    ]
+                })
+                self.applied.append(f"FAQPage-skeema generoitu AI:lla ({len(items)} Q&A)")
+            else:
+                graph.append({"@type": "FAQPage", "mainEntity": []})
+
+        elif schema_type == "HowTo":
+            _info("  AI generoi HowTo-askeleet...")
+            steps = writer.howto_steps(self._title_text, self._body_text)
+            if steps:
+                graph.append({
+                    "@type": "HowTo",
+                    "name": self._title_text,
+                    "description": self._body_text[:200],
+                    "step": [
+                        {"@type": "HowToStep", "position": i + 1,
+                         "name": s.get("name", ""), "text": s.get("text", "")}
+                        for i, s in enumerate(steps)
+                    ]
+                })
+                self.applied.append(f"HowTo-skeema generoitu AI:lla ({len(steps)} askelta)")
+            else:
+                graph.append({"@type": "WebPage", "name": self._title_text, "url": self._page_url()})
+
+        elif schema_type == "Service":
+            graph.append({
+                "@type": "Service",
+                "name": self._title_text,
+                "provider": {"@id": "#organization"} if has_org else None,
+                "url": self._page_url(),
+            })
+            self.applied.append("Service-skeema lisätty")
+
+        elif schema_type == "ContactPage":
+            graph.append({
+                "@type": "ContactPage",
+                "name": self._title_text,
+                "url": self._page_url(),
+                "mainEntity": {"@id": "#organization"} if has_org else None,
+            })
+            self.applied.append("ContactPage-skeema lisätty")
+
+        elif schema_type == "AboutPage":
+            graph.append({
+                "@type": "AboutPage",
+                "name": self._title_text,
+                "url": self._page_url(),
+                "publisher": {"@id": "#organization"} if has_org else None,
+            })
+            self.applied.append("AboutPage-skeema lisätty")
+
+        else:
+            graph.append({
+                "@type": "WebPage",
+                "name": self._title_text,
+                "url": self._page_url(),
+                "publisher": {"@id": "#organization"} if has_org else None,
+            })
+            self.applied.append("WebPage-skeema lisätty")
+
+        # Siivoa None-arvot
+        graph = [{k: v for k, v in item.items() if v is not None} for item in graph if item]
+
+        new_data = {"@context": "https://schema.org", "@graph": graph}
+        new_script = self.soup.new_tag("script", type="application/ld+json")
+        new_script["data-aeo-tool"] = VERSION  # merkki: tämän generoi työkalu (idempotenssi)
+        new_script.string = "\n" + json.dumps(new_data, indent=2, ensure_ascii=False) + "\n"
+
+        # Poista vanhat placeholders
+        for old in self.soup.find_all("script", type="application/ld+json"):
+            try:
+                d = json.loads(old.string or "{}")
+                items = d.get("@graph", [d]) if isinstance(d, dict) else [d]
+                has_ph = any(
+                    isinstance(i, dict) and (
+                        i.get("name") in ("Yrityksesi nimi", "Sivuston nimi", "Your Company") or
+                        i.get("url") == "https://example.com"
+                    )
+                    for i in items
+                )
+                if has_ph:
+                    old.decompose()
+            except Exception:
+                pass
+
+        head.append(new_script)
+
+    def _page_url(self) -> str:
+        if self.url:
+            return self.url
+        if self.site.url and self.filename:
+            name = re.sub(r"\.html?$", "", self.filename)
+            slug = "" if name == "index" else name
+            base = self.site.url.rstrip("/")
+            return f"{base}/{slug}" if slug else base + "/"
+        return ""
+
+
+# ── Apufunktiot ─────────────────────────────────────────────────────────────
+
+def _trunc(t: str, n: int) -> str:
+    return t if len(t) <= n else t[:n] + "…"
+
+def _has_lxml() -> bool:
+    try:
+        import lxml
+        return True
+    except ImportError:
+        return False
+
+def scores(checks: List[Check]) -> Tuple[int, int]:
+    return sum(c.score for c in checks), sum(c.max_score for c in checks)
+
+def score_pct(checks: List[Check]) -> float:
+    s, m = scores(checks)
+    return round(s / m * 100, 1) if m else 0.0
+
+def grade(pct: float) -> str:
+    for threshold, g in [(92, "A+"), (85, "A"), (75, "B+"), (65, "B"), (55, "C"), (40, "D")]:
+        if pct >= threshold:
+            return g
+    return "F"
+
+def col(pct: float) -> str:
+    return "green" if pct >= 75 else ("yellow" if pct >= 50 else "red")
+
+def _info(msg): console.print(f"[dim]{msg}[/dim]") if RICH else print(msg)
+def _ok(msg):   console.print(f"[green]{msg}[/green]") if RICH else print(msg)
+def _warn(msg): console.print(f"[yellow]⚠ {msg}[/yellow]") if RICH else print(f"VAROITUS: {msg}")
+def _err(msg):  console.print(f"[red]{msg}[/red]") if RICH else print(f"VIRHE: {msg}")
+def _hdr(msg):  console.print(f"\n[bold blue]{msg}[/bold blue]\n") if RICH else print(f"\n{msg}\n")
+
+
+def print_results(checks: List[Check], title: str = ""):
+    s, mx = scores(checks)
+    pct = s / mx * 100 if mx else 0
+    if not RICH:
+        print(f"\n{'='*55}\n  {title}\n  {s}/{mx} ({pct:.0f}%) – {grade(pct)}\n{'='*55}")
+        for c in checks:
+            icon = ICONS.get(c.status, "?")
+            print(f"  {icon} {c.name}: {c.score}/{c.max_score} — {c.message}")
+            if c.suggestion:
+                print(f"     → {c.suggestion}")
+        return
+
+    c_col = col(pct)
+    if title:
+        console.print(f"\n[bold]{title}[/bold]")
+    console.print(Panel(
+        f"[bold {c_col}]{s}/{mx} ({pct:.0f}%) – {grade(pct)}[/bold {c_col}]",
+        title="AEO/SEO Score", border_style=c_col))
+
+    cats: Dict[str, List[Check]] = {}
+    for ch in checks:
+        cats.setdefault(ch.category, []).append(ch)
+
+    for cat, chs in cats.items():
+        cs, cm = scores(chs)
+        tbl = Table(title=f"{cat}  ({cs}/{cm})", box=box.ROUNDED, min_width=75)
+        tbl.add_column("", width=3)
+        tbl.add_column("Tarkistus", style="bold", min_width=22)
+        tbl.add_column("Tulos", ratio=3)
+        tbl.add_column("Pisteet", width=9, justify="right")
+        for ch in chs:
+            cc = COLORS.get(ch.status, "white")
+            tbl.add_row(ICONS.get(ch.status, "?"), ch.name,
+                        f"[{cc}]{ch.message}[/{cc}]", f"{ch.score}/{ch.max_score}")
+            if ch.suggestion:
+                tbl.add_row("", "", f"[dim]→ {ch.suggestion}[/dim]", "")
+        console.print(tbl)
+
+
+def recommendations(checks: List[Check]) -> List[str]:
+    priority = [
+        ("JSON-LD / Structured Data", "Lisää/korjaa JSON-LD rakenteellinen data — kriittistä AEO:lle (ChatGPT, Perplexity)"),
+        ("Meta Description",          "Kirjoita optimoitu meta description (120–160 merkkiä)"),
+        ("Title-tägi",                "Optimoi title: 30–60 merkkiä, pääavainsana + brändi"),
+        ("H1-otsikko",                "Lisää yksi H1-otsikko jokaiselle sivulle"),
+        ("Open Graph",                "Lisää Open Graph -tagit — parantaa some-jakoa merkittävästi"),
+        ("Twitter/X Card",            "Lisää Twitter/X Card -metatagit"),
+        ("AEO-sisältösignaalit",      "Lisää Q&A-osio tai FAQPage-skeema — AI-assistentit suosivat vastausmuotoista sisältöä"),
+        ("Auktoriteetti & luottamus", "Lisää yhteystiedot, tietosuojasivu ja sosiaalisen median linkit"),
+        ("Kuvien alt-tekstit",        "Lisää kuvaava alt-teksti jokaiselle sisältökuvalle"),
+        ("Otsikkorakenne",            "Korjaa otsikkorakenne — ei hyppyjä (H1→H3 tms.)"),
+        ("Canonical-tägi",            "Lisää canonical-tägi kanonisointia varten"),
+        ("HTML lang-attribuutti",     "Lisää lang-attribuutti HTML-tagiin"),
+        ("Sisäiset linkit",           "Lisää linkkejä omille muille sivuille — parantaa hakurobottien toimintaa"),
+    ]
+    bad = {c.name for c in checks if c.status != "pass"}
+    return [r for n, r in priority if n in bad]
+
+
+# ── HTML-raporttigeneroija ───────────────────────────────────────────────────
+
+def generate_html_report(
+    results: Dict[str, List[Check]],
+    site: SiteContext,
+    before_results: Optional[Dict[str, List[Check]]] = None,
+    fixes_applied: Dict[str, List[str]] = None,
+    output_path: Path = None,
+) -> Path:
+    """Generoi kauniin dark-theme HTML-raportin tuloksista."""
+
+    fixes_applied = fixes_applied or {}
+    esc = html_mod.escape  # sivuilta peräisin oleva teksti escapetaan aina
+    now_str = datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
+    site_label = esc(site.name or site.url or "Sivusto")
+
+    total_pages = len(results)
+    all_checks = [c for chs in results.values() for c in chs]
+    overall_s, overall_m = scores(all_checks)
+    overall_pct = overall_s / overall_m * 100 if overall_m else 0
+    overall_grade = grade(overall_pct)
+
+    before_pct = 0.0
+    if before_results:
+        before_checks = [c for chs in before_results.values() for c in chs]
+        b_s, b_m = scores(before_checks)
+        before_pct = b_s / b_m * 100 if b_m else 0
+
+    total_fixes = sum(len(v) for v in fixes_applied.values())
+
+    def score_color(pct: float) -> str:
+        if pct >= 85: return "#22c55e"
+        if pct >= 70: return "#f59e0b"
+        return "#ef4444"
+
+    def bar_html(s: int, mx: int, width: int = 100) -> str:
+        pct_val = s / mx * 100 if mx else 0
+        c = score_color(pct_val)
+        return (f'<div class="bw"><div class="bar" style="width:{min(pct_val,100):.0f}%;'
+                f'background:{c}"></div></div>')
+
+    def status_icon(status: str) -> str:
+        return {"pass": "✅", "warn": "⚠️", "fail": "❌"}.get(status, "?")
+
+    # Per-page rows
+    page_rows = ""
+    for fname, chs in sorted(results.items()):
+        ps, pm = scores(chs)
+        ppct = ps / pm * 100 if pm else 0
+        pg = grade(ppct)
+        pc = score_color(ppct)
+
+        delta_html = ""
+        if before_results and fname in before_results:
+            bs2, bm2 = scores(before_results[fname])
+            bpct2 = bs2 / bm2 * 100 if bm2 else 0
+            delta = ppct - bpct2
+            d_col = "#4ade80" if delta > 0 else ("#ef4444" if delta < 0 else "#64748b")
+            delta_html = f'<span style="color:{d_col};font-weight:700">{delta:+.0f}</span>'
+
+        page_fixes = fixes_applied.get(fname, [])
+        fixes_html = "".join(f"<li>✅ {esc(f)}</li>" for f in page_fixes) if page_fixes else "<li style='color:#475569'>Ei muutoksia</li>"
+
+        page_rows += f"""
+    <tr>
+      <td class="page-name">{esc(fname.replace('.html',''))}<br><span class="filename">{esc(fname)}</span></td>
+      <td>
+        <div class="sc">
+          <span class="sn" style="color:{pc}">{ps}</span>
+          {bar_html(ps, pm)}
+          <span class="gr" style="color:{pc}">{pg}</span>
+        </div>
+      </td>
+      <td><span class="delta">{delta_html}</span></td>
+      <td><ul class="fl">{fixes_html}</ul></td>
+    </tr>"""
+
+    # Checks detail per page
+    detail_sections = ""
+    for fname, chs in sorted(results.items()):
+        ps, pm = scores(chs)
+        ppct = ps / pm * 100 if pm else 0
+        pc = score_color(ppct)
+        pg = grade(ppct)
+
+        check_rows = ""
+        cats: Dict[str, List[Check]] = {}
+        for c in chs:
+            cats.setdefault(c.category, []).append(c)
+
+        for cat, cat_chs in cats.items():
+            cs2, cm2 = scores(cat_chs)
+            check_rows += f'<tr class="cat-row"><td colspan="4">{esc(cat)} ({cs2}/{cm2})</td></tr>'
+            for c in cat_chs:
+                icon = status_icon(c.status)
+                sug = f'<br><span class="sug">→ {esc(c.suggestion)}</span>' if c.suggestion else ""
+                check_rows += f"""
+        <tr>
+          <td>{icon}</td>
+          <td>{esc(c.name)}</td>
+          <td>{esc(c.message)}{sug}</td>
+          <td style="text-align:right;font-weight:700">{c.score}/{c.max_score}</td>
+        </tr>"""
+
+        detail_sections += f"""
+  <div class="page-detail">
+    <div class="page-detail-header">
+      <span class="page-detail-name">{esc(fname)}</span>
+      <span class="score-badge" style="background:{pc}20;border-color:{pc};color:{pc}">{ps}/{pm} · {pg}</span>
+    </div>
+    <table class="detail-table">
+      <thead><tr><th></th><th>Tarkistus</th><th>Tulos</th><th>Pisteet</th></tr></thead>
+      <tbody>{check_rows}</tbody>
+    </table>
+  </div>"""
+
+    # Recommendations
+    recs = recommendations(all_checks)
+    rec_items = ""
+    for i, r in enumerate(recs, 1):
+        tag_cls = "r" if i <= 3 else ("y" if i <= 6 else "g")
+        pri = "Korkea" if i <= 3 else ("Keskitaso" if i <= 6 else "Matala")
+        rec_items += f'<li><span class="tag {tag_cls}">{pri}</span> {esc(r)}</li>'
+
+    html = f"""<!DOCTYPE html>
+<html lang="fi"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AEO/SEO Raportti v{VERSION} — {site_label}</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;font-size:14px}}
+.hero{{background:linear-gradient(135deg,#1e293b,#0f172a);padding:52px 40px 44px;text-align:center;border-bottom:1px solid #1e293b}}
+.hero h1{{font-size:1.8rem;font-weight:800;color:#f1f5f9;margin-bottom:4px}}
+.hero .sub{{color:#64748b;font-size:.85rem;margin-bottom:40px}}
+.scores{{display:flex;justify-content:center;align-items:center;gap:0;max-width:680px;margin:0 auto 22px}}
+.sb{{flex:1;background:#1e293b;border-radius:16px;padding:26px 18px;text-align:center}}
+.sb.b{{border:1px solid #334155}}.sb.a{{border:2px solid #22c55e;box-shadow:0 0 24px rgba(34,197,94,.14)}}
+.sb .lbl{{font-size:.72rem;text-transform:uppercase;letter-spacing:.1em;color:#64748b;margin-bottom:8px}}
+.sb .big{{font-size:3.4rem;font-weight:800;line-height:1}}
+.sb .grd{{font-size:1.3rem;font-weight:700;margin-top:4px}}
+.sb .s2{{font-size:.76rem;color:#64748b;margin-top:4px}}
+.arrow{{font-size:2rem;color:#22c55e;padding:0 18px;flex-shrink:0}}
+.badges{{display:flex;justify-content:center;gap:10px;flex-wrap:wrap}}
+.badge{{font-size:.88rem;font-weight:700;padding:6px 16px;border-radius:99px;display:inline-block}}
+.badge.g{{background:#052e16;border:1px solid #22c55e;color:#4ade80}}
+.badge.b{{background:#0c1a38;border:1px solid #3b82f6;color:#60a5fa}}
+.badge.y{{background:#451a03;border:1px solid #f59e0b;color:#fbbf24}}
+.sec{{max-width:1200px;margin:32px auto;padding:0 20px}}
+.sec-t{{font-size:.9rem;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px}}
+table{{width:100%;border-collapse:collapse;background:#1e293b;border-radius:12px;overflow:hidden;border:1px solid #334155}}
+th{{background:#0f172a;padding:11px 13px;text-align:left;font-size:.72rem;text-transform:uppercase;letter-spacing:.07em;color:#64748b;border-bottom:1px solid #334155}}
+td{{padding:13px;border-bottom:1px solid #1a2744;vertical-align:top}}
+tr:last-child td{{border-bottom:none}}
+tr:hover td{{background:#243050}}
+.cat-row td{{background:#0f172a;color:#64748b;font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;padding:8px 13px;font-weight:700}}
+.page-name{{font-weight:600;color:#f1f5f9}}
+.filename{{font-size:.7rem;color:#475569;font-family:monospace}}
+.sc{{display:flex;align-items:center;gap:6px}}
+.sn{{font-size:1.2rem;font-weight:800;width:28px;text-align:right;flex-shrink:0}}
+.bw{{flex:1;background:#0f172a;border-radius:99px;height:6px;min-width:50px}}
+.bar{{height:6px;border-radius:99px}}
+.gr{{font-size:.78rem;font-weight:700;width:22px;flex-shrink:0}}
+.delta{{font-weight:700;font-size:.9rem}}
+.fl{{list-style:none;font-size:.78rem;line-height:1.9;color:#94a3b8;padding:0}}
+.sug{{color:#f59e0b;font-size:.75rem}}
+.recs{{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:20px}}
+.recs ol{{padding-left:18px}}
+.recs li{{padding:8px 0;border-bottom:1px solid #1a2744;color:#cbd5e1;font-size:.88rem;line-height:1.5}}
+.recs li:last-child{{border-bottom:none}}
+.tag{{display:inline-block;font-size:.66rem;font-weight:700;padding:2px 7px;border-radius:4px;margin-right:5px;text-transform:uppercase}}
+.tag.r{{background:#450a0a;color:#f87171}}.tag.y{{background:#451a03;color:#fbbf24}}.tag.g{{background:#052e16;color:#4ade80}}
+.page-detail{{background:#1e293b;border:1px solid #334155;border-radius:12px;margin-bottom:16px;overflow:hidden}}
+.page-detail-header{{padding:14px 18px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #334155;background:#0f172a}}
+.page-detail-name{{font-weight:700;color:#f1f5f9}}
+.score-badge{{font-size:.8rem;font-weight:700;padding:4px 12px;border-radius:99px;border:1px solid}}
+.detail-table{{width:100%;border-collapse:collapse}}
+.detail-table td{{padding:11px 13px;border-bottom:1px solid #1a2744;vertical-align:top;font-size:.82rem}}
+.detail-table td:last-child{{text-align:right;width:70px}}
+.detail-table tr:hover td{{background:#243050}}
+.detail-table tr:last-child td{{border-bottom:none}}
+.ai-recs{{background:#1e293b;border:1px solid #3b82f6;border-radius:12px;padding:20px;color:#cbd5e1;line-height:1.7;font-size:.9rem}}
+footer{{text-align:center;padding:32px;color:#334155;font-size:.72rem;border-top:1px solid #1e293b;margin-top:40px}}
+</style></head><body>
+
+<div class="hero">
+  <h1>AEO/SEO Auditointi v{VERSION} — {site_label}</h1>
+  <p class="sub">
+    {now_str} &nbsp;·&nbsp;
+    {total_pages} sivua analysoitu &nbsp;·&nbsp;
+    {total_fixes} korjausta tehty &nbsp;·&nbsp;
+    20 tarkistusta per sivu
+  </p>
+  <div class="scores">
+    {'<div class="sb b"><div class="lbl">Lähtötila</div><div class="big" style="color:' + score_color(before_pct) + '">' + f"{before_pct:.0f}" + '</div><div class="grd" style="color:' + score_color(before_pct) + '">' + grade(before_pct) + '</div><div class="s2">/ 100 — keskiarvo</div></div><div class="arrow">→</div>' if before_results else ""}
+    <div class="sb a">
+      <div class="lbl">{"Lopputila" if before_results else "Nykyinen tila"}</div>
+      <div class="big" style="color:{score_color(overall_pct)}">{overall_pct:.0f}</div>
+      <div class="grd" style="color:{score_color(overall_pct)}">{overall_grade}</div>
+      <div class="s2">/ 100 — keskiarvo {total_pages} sivua</div>
+    </div>
+  </div>
+  <div class="badges">
+    {f'<span class="badge g">+{overall_pct - before_pct:.0f} pistettä parannus</span>' if before_results and overall_pct > before_pct else ""}
+    <span class="badge b">{total_pages} sivua analysoitu</span>
+    <span class="badge {'g' if total_fixes else 'y'}">{total_fixes} korjausta tehty</span>
+    <span class="badge {'g' if overall_pct >= 85 else 'y'}">{"Tavoite saavutettu ✅" if overall_pct >= 80 else "Tarvitsee parannuksia"}</span>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="sec-t">Sivukohtainen yhteenveto</div>
+  <table>
+    <thead><tr>
+      <th>Sivu</th>
+      <th>Pisteet</th>
+      <th>Δ</th>
+      <th>Korjaukset tässä ajossa</th>
+    </tr></thead>
+    <tbody>{page_rows}</tbody>
+  </table>
+</div>
+
+<div class="sec">
+  <div class="sec-t">Seuraavat toimenpiteet (prioriteettijärjestyksessä)</div>
+  <div class="recs"><ol>{rec_items}</ol></div>
+</div>
+
+<div class="sec">
+  <div class="sec-t">Sivukohtaiset tarkistukset</div>
+  {detail_sections}
+</div>
+
+<footer>
+  AEO/SEO Audit Tool v{VERSION} &nbsp;·&nbsp; {site_label} &nbsp;·&nbsp; {now_str}<br>
+  {esc(COSTS.summary())}
+</footer>
+</body></html>"""
+
+    if output_path is None:
+        output_path = Path("./reports")
+    output_path.mkdir(parents=True, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe = re.sub(r"[^\w]", "_", site_label)[:30]
+    out_file = output_path / f"audit_v3_{safe}_{ts}.html"
+    out_file.write_text(html, encoding="utf-8")
+    return out_file
+
+
+# ── Raporttien tallennus ─────────────────────────────────────────────────────
+
+def save_reports(
+    target: str,
+    target_type: str,
+    results: Dict[str, List[Check]],
+    before: Optional[Dict[str, List[Check]]],
+    fixes: Dict[str, List[str]],
+    site: SiteContext,
+    out: Path,
+):
+    ts_label = datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
+    ts_file  = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe = re.sub(r"[^\w]", "_", target)[:35]
+
+    all_checks = [c for chs in results.values() for c in chs]
+    s, m = scores(all_checks)
+    pct = round(s / m * 100, 1) if m else 0
+
+    before_pct = None
+    if before:
+        bc = [c for chs in before.values() for c in chs]
+        bs, bm = scores(bc)
+        before_pct = round(bs / bm * 100, 1) if bm else None
+
+    all_fixes = [f"{pg}: {fix}" for pg, fl in fixes.items() for fix in fl]
+
+    # JSON
+    json_path = out / f"audit_v3_{safe}_{ts_file}.json"
+    json_path.write_text(json.dumps({
+        "tool_version": VERSION,
+        "target": target,
+        "target_type": target_type,
+        "timestamp": ts_label,
+        "site": {"name": site.name, "url": site.url, "email": site.email},
+        "overall_score": pct,
+        "before_score": before_pct,
+        "pages": {
+            fname: {
+                "score": score_pct(chs),
+                "grade": grade(score_pct(chs)),
+                "checks": [{"name": c.name, "category": c.category,
+                            "score": c.score, "max": c.max_score,
+                            "status": c.status, "message": c.message} for c in chs]
+            }
+            for fname, chs in results.items()
+        },
+        "fixes_applied": all_fixes,
+        "recommendations": recommendations(all_checks),
+        "ai_usage": COSTS.as_dict(),
+    }, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # Markdown
+    md_path = out / f"audit_v3_{safe}_{ts_file}.md"
+    recs = recommendations(all_checks)
+    lines = [f"# AEO/SEO Raportti v{VERSION} — {target}", "",
+             f"**Päiväys:** {ts_label}  ",
+             f"**Sivusto:** {site.name} ({site.url})  ",
+             f"**Kokonaistulos:** {pct:.0f}/100 — {grade(pct)}  ",
+             f"**Ennen:** {before_pct:.0f}/100  " if before_pct is not None else "",
+             "", "---", "", "## Sivukohtaiset pisteet", ""]
+    for fname, chs in sorted(results.items()):
+        p = score_pct(chs)
+        lines.append(f"- **{fname}**: {p:.0f}/100 ({grade(p)})")
+    if all_fixes:
+        lines += ["", "## Tehdyt korjaukset", ""]
+        for f in all_fixes:
+            lines.append(f"- ✅ {f}")
+    if recs:
+        lines += ["", "## Seuraavat toimenpiteet", ""]
+        for i, r in enumerate(recs, 1):
+            lines.append(f"{i}. {r}")
+    md_path.write_text("\n".join(lines), encoding="utf-8")
+
+    # HTML
+    html_path = generate_html_report(results, site, before, fixes, out)
+
+    if RICH:
+        console.print(f"\n[bold green]Raportit tallennettu:[/bold green]")
+        console.print(f"  📊 {json_path}")
+        console.print(f"  📄 {md_path}")
+        console.print(f"  🌐 {html_path}")
+    else:
+        print(f"\nRaportit:\n  {json_path}\n  {md_path}\n  {html_path}")
+
+    return html_path
+
+
+# ── Cross-page analyysi ──────────────────────────────────────────────────────
+
+def cross_page_warnings(html_map: Dict[str, str]) -> List[str]:
+    """Havaitsee ristiriitoja/duplikaatteja sivujen välillä."""
+    warnings = []
+    titles: Dict[str, str] = {}
+    descs: Dict[str, str] = {}
+    parser = "lxml" if _has_lxml() else "html.parser"
+
+    for fname, html in html_map.items():
+        soup = BeautifulSoup(html, parser)
+        t = soup.find("title")
+        d = soup.find("meta", attrs={"name": "description"})
+        if t:
+            txt = t.get_text(strip=True)
+            if txt in titles.values():
+                orig = [k for k, v in titles.items() if v == txt]
+                warnings.append(f"Duplikaatti title: '{_trunc(txt, 40)}' ({fname} == {orig[0]})")
+            titles[fname] = txt
+        if d:
+            txt = (d.get("content") or "").strip()
+            if txt and txt in descs.values():
+                orig = [k for k, v in descs.items() if v == txt]
+                warnings.append(f"Duplikaatti meta description ({fname} == {orig[0]})")
+            if txt:
+                descs[fname] = txt
+
+    return warnings
+
+
+# ── Repo-ajuri ───────────────────────────────────────────────────────────────
+
+def audit_repo(repo: Path, fix: bool, out: Path, site_args: SiteContext, open_report: bool = True):
+    _hdr(f"AEO/SEO Audit v{VERSION} — {repo}")
+
+    if not AI_AVAILABLE:
+        _warn("anthropic-paketti puuttuu tai API-avain puuttuu — AI-ominaisuudet pois")
+    else:
+        _info(f"AI käytössä: claude-haiku-4-5-20251001")
+
+    html_files = sorted([
+        f for f in (list(repo.rglob("*.html")) + list(repo.rglob("*.htm")))
+        if not SKIP_DIRS.intersection(set(f.parts))
+        and not GOOGLE_VERIFY_RE.fullmatch(f.name)
+    ])
+    if not html_files:
+        _warn("HTML-tiedostoja ei löydy"); return
+
+    _info(f"Löytyi {len(html_files)} HTML-tiedostoa")
+
+    # Lue kaikki HTML:t
+    html_map: Dict[str, str] = {}
+    for f in html_files:
+        try:
+            html_map[f.name] = f.read_text(encoding="utf-8", errors="ignore")
+        except OSError as e:
+            _warn(f"Ei voitu lukea: {e}")
+
+    # Tunnista sivustokonteksti
+    soups = [BeautifulSoup(h, "lxml" if _has_lxml() else "html.parser")
+             for h in html_map.values()]
+    site = detect_site_context(soups, site_args.url, site_args.name, site_args.email)
+    if site_args.logo_url:
+        site.logo_url = site_args.logo_url
+
+    if site.name:
+        _info(f"Sivusto tunnistettu: {site.name} ({site.url})")
+    else:
+        _warn("Sivuston nimeä ei tunnistettu — käytä --site-name")
+
+    # Cross-page varoitukset
+    xp_warns = cross_page_warnings(html_map)
+    if xp_warns:
+        console.print("\n[bold yellow]Cross-page varoitukset:[/bold yellow]") if RICH else print("\nVaroitukset:")
+        for w in xp_warns:
+            _warn(w)
+
+    results: Dict[str, List[Check]] = {}
+    before_results: Dict[str, List[Check]] = {}
+    fixes_applied: Dict[str, List[str]] = {}
+
+    for f in html_files:
+        fname = f.name
+        html = html_map.get(fname, "")
+        if not html:
+            continue
+
+        if RICH:
+            console.rule(f"[dim]{fname}[/dim]")
+        else:
+            print(f"\n{'─'*50}\n{fname}")
+
+        before_checks = PageAuditor(html, file_path=str(f), site=site).run()
+        before_results[fname] = before_checks
+        print_results(before_checks, fname)
+
+        if fix:
+            fixer = AIFixer(html, filename=fname, site=site)
+            fixed_html = fixer.fix(before_checks)
+            if fixer.applied:
+                try:
+                    bak = f.with_suffix(f.suffix + ".bak")
+                    if not bak.exists():
+                        shutil.copy2(f, bak)
+                    f.write_text(fixed_html, encoding="utf-8")
+                except OSError as e:
+                    _warn(f"Ei voitu kirjoittaa {fname}: {e} — sivu ohitettu")
+                    results[fname] = before_checks
+                    continue
+                for msg in fixer.applied:
+                    _ok(f"  ✅ {fname}: {msg}")
+                fixes_applied[fname] = fixer.applied
+                results[fname] = PageAuditor(fixed_html, file_path=str(f), site=site).run()
+                print_results(results[fname], f"{fname} (jälkeen)")
+            else:
+                results[fname] = before_checks
+        else:
+            results[fname] = before_checks
+
+    # Yhteenveto
+    all_checks = [c for chs in results.values() for c in chs]
+    ts, tm = scores(all_checks)
+    tpct = ts / tm * 100 if tm else 0
+    if RICH:
+        console.rule("[bold]YHTEENVETO[/bold]")
+        c_col = col(tpct)
+        console.print(Panel(
+            f"[bold {c_col}]{tpct:.0f}/100 – {grade(tpct)}[/bold {c_col}]\n"
+            f"Sivuja: {len(results)} | Korjauksia: {sum(len(v) for v in fixes_applied.values())}",
+            title="Lopputulos", border_style=c_col))
+
+        # Per-sivu pisteet
+        from rich.table import Table as RTable
+        t = RTable(box=box.SIMPLE)
+        t.add_column("Sivu", style="bold")
+        t.add_column("Pisteet", justify="right")
+        t.add_column("Arvosana")
+        t.add_column("Status")
+        for fname, chs in sorted(results.items()):
+            p = score_pct(chs)
+            g = grade(p)
+            c2 = "green" if p >= 80 else ("yellow" if p >= 60 else "red")
+            icon = "✅" if p >= 80 else ("⚠️" if p >= 60 else "❌")
+            t.add_row(fname, f"[{c2}]{p:.0f}[/{c2}]", f"[{c2}]{g}[/{c2}]", icon)
+        console.print(t)
+
+    html_report = save_reports(
+        str(repo), "repo", results,
+        before_results if fix else None,
+        fixes_applied, site, out
+    )
+
+    _info(f"\n{COSTS.summary()}")
+
+    # Avaa HTML-raportti automaattisesti (ellei --no-open)
+    if open_report:
+        try:
+            import subprocess
+            subprocess.Popen(["open", str(html_report)])
+            _ok(f"\nHTML-raportti avattu selaimessa: {html_report}")
+        except OSError:
+            pass
+
+
+# ── URL-ajuri ────────────────────────────────────────────────────────────────
+
+def _fetch_url(url: str, attempts: int = 3) -> str:
+    """Hakee sivun HTML:n. Uudelleenyrittää verkko- ja palvelinvirheet (5xx),
+    ei asiakasvirheitä (4xx). Selkeät suomenkieliset virheilmoitukset."""
+    import time
+    last_error = ""
+    for attempt in range(1, attempts + 1):
+        try:
+            resp = requests.get(url, headers={"User-Agent": f"AEOSEOAuditBot/{VERSION}"}, timeout=20)
+            if resp.status_code >= 500:
+                last_error = f"Palvelin vastasi virheellä HTTP {resp.status_code}"
+            elif resp.status_code >= 400:
+                _err(f"Sivua ei voitu hakea: HTTP {resp.status_code} "
+                     f"({'sivua ei löydy' if resp.status_code == 404 else 'pääsy estetty tai virheellinen pyyntö'}) — {url}")
+                sys.exit(1)
+            else:
+                return resp.text
+        except requests.exceptions.SSLError:
+            _err(f"SSL-varmennevirhe osoitteessa {url} — sivuston varmenne voi olla vanhentunut")
+            sys.exit(1)
+        except requests.exceptions.Timeout:
+            last_error = "Aikakatkaisu (sivu ei vastannut 20 sekunnissa)"
+        except requests.exceptions.ConnectionError:
+            last_error = "Yhteysvirhe (tarkista osoite ja internet-yhteys)"
+        except requests.RequestException as e:
+            last_error = str(e)
+        if attempt < attempts:
+            wait = 2 * attempt
+            _warn(f"{last_error} — yritetään uudelleen {wait} s kuluttua ({attempt}/{attempts - 1})")
+            time.sleep(wait)
+    _err(f"Sivun haku epäonnistui {attempts} yrityksen jälkeen: {last_error} — {url}")
+    sys.exit(1)
+
+
+def audit_url(url: str, fix: bool, out: Path, site_args: SiteContext):
+    _hdr(f"AEO/SEO Audit v{VERSION} — {url}")
+    html = _fetch_url(url)
+
+    parser = "lxml" if _has_lxml() else "html.parser"
+    site = detect_site_context([BeautifulSoup(html, parser)],
+                               site_args.url or url, site_args.name, site_args.email)
+    if site_args.logo_url:
+        site.logo_url = site_args.logo_url
+    if not site.url:
+        parsed = urlparse(url)
+        site.url = f"{parsed.scheme}://{parsed.netloc}"
+
+    fname = urlparse(url).path.strip("/").replace("/", "_") or "index"
+    fname = fname + ".html"
+
+    before_checks = PageAuditor(html, url=url, site=site).run()
+    print_results(before_checks, "ENNEN")
+
+    fixes_applied: Dict[str, List[str]] = {}
+    results: Dict[str, List[Check]] = {}
+
+    if fix:
+        fixer = AIFixer(html, url=url, filename=fname, site=site)
+        fixed_html = fixer.fix(before_checks)
+        if fixer.applied:
+            fixes_applied[fname] = fixer.applied
+            ts_file = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            fixed_path = out / f"fixed_v3_{ts_file}.html"
+            fixed_path.write_text(fixed_html, encoding="utf-8")
+            _ok(f"Korjattu HTML → {fixed_path}")
+        after_checks = PageAuditor(fixed_html if fixer.applied else html, url=url, site=site).run()
+        results[fname] = after_checks
+        print_results(after_checks, "JÄLKEEN")
+    else:
+        results[fname] = before_checks
+
+    save_reports(url, "url", results,
+                 {fname: before_checks} if fix else None,
+                 fixes_applied, site, out)
+
+    _info(f"\n{COSTS.summary()}")
+
+
+# ── CLI ──────────────────────────────────────────────────────────────────────
+
+def main():
+    p = argparse.ArgumentParser(
+        description=f"AEO/SEO Audit Tool v{VERSION} — toimii mille tahansa sivustolle",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Esimerkkejä:
+  python aeo_seo_tool_v3.py --repo ./sivusto
+  python aeo_seo_tool_v3.py --repo . --fix
+  python aeo_seo_tool_v3.py --url https://example.com
+  python aeo_seo_tool_v3.py --repo . --fix --site-url https://oma.fi --site-name "Yritys Oy"
+""")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--url",  metavar="URL", help="Auditoitavan sivuston URL")
+    g.add_argument("--repo", metavar="POLKU", help="Auditoitavan repositorion polku")
+    p.add_argument("--fix",        action="store_true", help="Sovella AI-korjaukset tiedostoihin")
+    p.add_argument("--output",     default="./reports",  metavar="HAKEMISTO",
+                   help="Raporttihakemisto (oletus: ./reports)")
+    p.add_argument("--site-url",   default="", metavar="URL",
+                   help="Sivuston base URL (auto-havaitaan jos puuttuu)")
+    p.add_argument("--site-name",  default="", metavar="NIMI",
+                   help="Sivuston/yrityksen nimi (auto-havaitaan jos puuttuu)")
+    p.add_argument("--site-email", default="", metavar="EMAIL",
+                   help="Yrityksen sähköpostiosoite")
+    p.add_argument("--site-logo",  default="", metavar="URL",
+                   help="Logo-kuvan URL")
+    p.add_argument("--no-open",    action="store_true",
+                   help="Älä avaa HTML-raporttia automaattisesti selaimessa")
+    p.add_argument("--eur-rate",   type=float, default=None, metavar="KURSSI",
+                   help=f"USD→EUR-kurssi kustannuslaskentaan (oletus {DEFAULT_USD_EUR}, myös AEO_USD_EUR-ympäristömuuttuja)")
+
+    args = p.parse_args()
+    if args.eur_rate:
+        COSTS.usd_eur = args.eur_rate
+    out = Path(args.output)
+    out.mkdir(parents=True, exist_ok=True)
+
+    site_args = SiteContext(
+        url=args.site_url,
+        name=args.site_name,
+        email=args.site_email,
+        logo_url=args.site_logo,
+    )
+
+    if args.url:
+        audit_url(args.url, args.fix, out, site_args)
+    else:
+        repo = Path(args.repo).resolve()
+        if not repo.exists():
+            _err(f"Hakemistoa ei löydy: {repo}"); sys.exit(1)
+        audit_repo(repo, args.fix, out, site_args, open_report=not args.no_open)
+
+
+if __name__ == "__main__":
+    main()

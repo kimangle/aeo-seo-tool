@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+
+# Generoidut raportit ja varmuuskopiot
+reports/
+*.bak
+fixed_v*.html
+
+# Paikalliset asetukset
+.claude/
+.DS_Store
+
+# Erillinen projekti (oma git-repo)
+klar-console/
