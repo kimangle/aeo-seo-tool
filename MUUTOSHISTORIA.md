@@ -1,17 +1,18 @@
-# AEO/SEO-työkalun muutoshistoria: v3 → v4 → v5
+# AEO/SEO-työkalun muutoshistoria: v3 → v4 → v5 → v6
 
-*Päivitetty 13.7.2026 · Kaikki versiot repossa rinnakkain — vanhoja ei muokata, uusin on käytössä.*
+*Päivitetty 23.7.2026 · Kaikki versiot repossa rinnakkain — vanhoja ei muokata, uusin on käytössä.*
 
 ## Yhdellä silmäyksellä
 
-| | **v3** | **v4** | **v5** |
-|---|---|---|---|
-| **Julkaistu** | 13.7.2026 (`8a3cd38`) | 13.7.2026 (`2f10f14`) | 13.7.2026 (`93aa37e`) |
-| **Teema** | Luotettavuus ja selkokielisyys | Ravintolat ja AEO-tiedostot | Klar-yhteensopivuus |
-| **Tarkistuksia per sivu** | 15 | 16 (+ ravintolatarkistus) | 18 (+ funnel ja widget) |
-| **Sivustotason tarkistuksia** | – | 3 (robots, sitemap, llms.txt) | 3 |
-| **Auditoi verkosta** | 1 sivu | 1 sivu | jopa 10 sivua (ryömintä) |
-| **Klar-vienti** | – | – | ✅ `--klar-json` |
+| | **v3** | **v4** | **v5** | **v6** |
+|---|---|---|---|---|
+| **Julkaistu** | 13.7.2026 (`8a3cd38`) | 13.7.2026 (`2f10f14`) | 13.7.2026 (`93aa37e`) | 23.7.2026 |
+| **Teema** | Luotettavuus ja selkokielisyys | Ravintolat ja AEO-tiedostot | Klar-yhteensopivuus | Korjauspaketti ja julkaisukunto |
+| **Tarkistuksia per sivu** | 15 | 16 (+ ravintolatarkistus) | 18 (+ funnel ja widget) | 18 |
+| **Sivustotason tarkistuksia** | – | 3 (robots, sitemap, llms.txt) | 3 | 5 (+ domain ja AI-botit) |
+| **Auditoi verkosta** | 1 sivu | 1 sivu | jopa 10 sivua (ryömintä) | jopa 10 sivua |
+| **Klar-vienti** | – | – | ✅ `--klar-json` | ✅ |
+| **Korjauspaketti asiakkaalle** | – | – | – | ✅ `--fix-guide` |
 
 ## v3 — Luotettavuus ja selkokielisyys *(pohjaversio)*
 
@@ -81,6 +82,41 @@ keskustelee Edvinin kanssa työkalun roolista Klarissa.*
 kolme tapausta (oikea widget / viallinen tunniste / demolomake); ryömintä livenä
 Roba Delillä; vanhat tarkistukset täsmälleen samat kuin v4:ssä.
 
+## v6 — Korjauspaketti ja julkaisukunto
+
+*Tausta: v5:n analyysi osoitti kolme aukkoa: URL-tilan korjaukset jäivät irrallisiksi
+tiedostoiksi ilman ohjeita, title (10 p) oli suurin tarkistus ilman fixeriä, ja
+noindex hukkui taulukkoriviksi. Lisäksi v5:n "mitä seuraavaksi" -listalta toteutettiin
+julkaisukunto-tarkistukset.*
+
+**Uutta:**
+
+1. **Asiakaskohtainen korjauspaketti** (`--fix-guide`, URL-tila) — korjaukset kootaan
+   luovutettavaksi paketiksi `reports/korjauspaketti_*/`: korjatut sivukopiot
+   (`korjatut-sivut/`), sivustotiedostot ja **OHJEET.html**. Ohjeessa jokaiselle
+   korjaukselle on copy-paste-snippet (Kopioi-nappi) ja alustakohtainen askel:
+   alusta tunnistetaan HTML:stä (wp-content → WordPress, wixstatic → Wix,
+   squarespace-cdn → Squarespace, muuten yleisohje). OHJEET.html on asiakkaalle
+   luovutettava dokumentti omalla vaalealla Anglés-tyylillä (ei raportin dark-teemaa).
+2. **Title-fixeri** — AI kirjoittaa puuttuvan tai parantaa liian lyhyen/pitkän titlen
+   samalla logiikalla kuin meta descriptionin. Validointi samoihin rajoihin (30–60 mk)
+   kuin tarkistus, jotta korjaus ei jää warn-tilaan ja toistu.
+3. **Noindex-eskalaatio** — noindex-sivut ja koko sivuston estävä robots.txt nostetaan
+   omana kriittisenä hälytyksenä raportin kärkeen: punainen banneri HTML-raportissa,
+   oma osio markdownissa, `critical_alerts`-kenttä JSONissa ja punainen paneeli
+   terminaalissa. Taulukkorivit ennallaan — eskalaatio on puhdas lisäys.
+4. **Julkaisukunto-tarkistukset** (sivustotason pseudosivuun): onko sivusto
+   esikatseludomainilla (.vercel.app, .netlify.app, .pages.dev, .github.io) ja
+   pääsevätkö AI-botit (GPTBot, ClaudeBot, PerplexityBot) sivustolle robots.txt:n
+   mukaan. Vain varoituksia — bottien esto voi olla tietoinen valinta, `--fix` ei
+   koske siihen. Klar-viennissä uudet kindit `preview-domain` (onPage) ja
+   `ai-bot-access` (aeo).
+
+**Testattu:** vanhojen tarkistusten regressio v5:tä vasten (identtiset tulokset ja
+Klar-JSON fixture-sivustolla); title-fixerin idempotenssi tupla-ajolla; korjauspaketin
+snippettien vastaavuus korjattuihin kopioihin sivu sivulta; alustatunnistuksen neljä
+tapausta; AI-bot-jäsentimen 9 syötetapausta ja domain-tarkistuksen 4 tapausta.
+
 ## Tärkeät periaatteet (kaikki versiot)
 
 - **Idempotenssi**: `--fix` uudelleen ajettuna ei koskaan duplikoi mitään
@@ -93,9 +129,6 @@ Roba Delillä; vanhat tarkistukset täsmälleen samat kuin v4:ssä.
 
 ## Mitä seuraavaksi (todettu, ei vielä tehty)
 
-- **Julkaisukunto-tarkistukset**: live-sivu noindex-tilassa (piilossa Googlelta!),
-  .vercel.app vs. oma domain, AI-bottien pääsy robots.txt:ssä (GPTBot, ClaudeBot,
-  PerplexityBot).
 - **Suorituskykytarkistukset**: sivun paino, latausta hidastavat skriptit.
 - **Klar-integraation viimeistely** Edvin-keskustelun jälkeen: ohut TypeScript-kerros,
   joka tallentaa työkalun JSONin konsolin tietokantaan.

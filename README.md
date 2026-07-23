@@ -2,7 +2,7 @@
 
 Auditoi ja korjaa verkkosivuston SEO:n (hakukonenäkyvyys) ja AEO:n
 (näkyvyys tekoälyhauissa kuten ChatGPT ja Perplexity). Uusin versio on
-`aeo_seo_tool_v5.py` — v1–v4 ovat mukana vertailun vuoksi.
+`aeo_seo_tool_v6.py` — v1–v5 ovat mukana vertailun vuoksi.
 
 ## Asennus
 
@@ -15,13 +15,16 @@ export ANTHROPIC_API_KEY=sk-ant-...   # tarvitaan vain AI-korjauksiin (--fix)
 
 ```bash
 # Auditoi paikallinen sivusto (HTML-tiedostot hakemistossa)
-python3 aeo_seo_tool_v4.py --repo ./sivusto
+python3 aeo_seo_tool_v6.py --repo ./sivusto
 
-# Auditoi ja korjaa automaattisesti (AI kirjoittaa mm. meta descriptionit)
-python3 aeo_seo_tool_v4.py --repo ./sivusto --fix
+# Auditoi ja korjaa automaattisesti (AI kirjoittaa mm. titlet ja meta descriptionit)
+python3 aeo_seo_tool_v6.py --repo ./sivusto --fix
 
 # Auditoi julkinen URL
-python3 aeo_seo_tool_v4.py --url https://example.com
+python3 aeo_seo_tool_v6.py --url https://example.com
+
+# Auditoi julkinen URL ja kokoa asiakkaalle korjauspaketti ohjeineen
+python3 aeo_seo_tool_v6.py --url https://example.com --fix-guide
 
 # Hyödyllisiä lippuja
 #   --no-open              älä avaa HTML-raporttia selaimeen
@@ -29,6 +32,26 @@ python3 aeo_seo_tool_v4.py --url https://example.com
 #   --site-url https://... sivuston osoite
 #   --eur-rate 0.90        USD→EUR-kurssi kustannuslaskentaan
 ```
+
+## Uutta v6:ssa
+
+**Asiakaskohtainen korjauspaketti** (`--fix-guide`, URL-tila). Korjaukset kootaan
+yhdeksi luovutettavaksi paketiksi `reports/korjauspaketti_*/`: korjatut sivukopiot,
+sivustotiedostot ja **OHJEET.html** — selkeä ohje, jossa jokaiselle korjaukselle on
+copy-paste-snippet ja alustakohtainen "mihin tämä liitetään" -askel. Alusta
+tunnistetaan HTML:stä automaattisesti (WordPress / Wix / Squarespace / yleinen).
+
+**Title-fixeri.** AI kirjoittaa puuttuvan tai parantaa liian lyhyen/pitkän titlen
+(30–60 mk) samalla logiikalla kuin meta descriptionin.
+
+**Noindex-hälytys raportin kärkeen.** Jos sivu on noindex-tilassa (piilossa
+Googlelta) tai robots.txt estää koko sivuston, asia nostetaan omana kriittisenä
+bannerina HTML-raportin, markdownin, JSONin ja terminaalin kärkeen.
+
+**Julkaisukunto-tarkistukset.** Onko sivusto esikatseludomainilla (.vercel.app,
+.netlify.app, .pages.dev, .github.io) ja pääsevätkö AI-botit (GPTBot, ClaudeBot,
+PerplexityBot) sivustolle robots.txt:n mukaan. Vain varoituksia — bottien esto voi
+olla tietoinen valinta, joten `--fix` ei koske siihen.
 
 ## Uutta v5:ssä
 
@@ -75,8 +98,9 @@ kansioon, josta ne voi ladata palvelimelle.
 
 ## Mitä työkalu tekee
 
-- 15 tarkistusta per sivu (title, meta description, otsikkorakenne,
-  JSON-LD, Open Graph, luotettavuussignaalit, AEO-sisältö ym.)
+- Jopa 20 tarkistusta per sivu (title, meta description, otsikkorakenne,
+  JSON-LD, Open Graph, luotettavuussignaalit, AEO-sisältö, funnel ym.)
+  + sivustotason tarkistukset (robots.txt, sitemap.xml, llms.txt, julkaisukunto)
 - `--fix` korjaa puutteet suoraan HTML-tiedostoihin ja ottaa `.bak`-varmuuskopiot;
   AI (Claude Haiku) kirjoittaa aidon sisällön placeholderien sijaan
 - Raportit `reports/`-hakemistoon: selkokielinen HTML-raportti asiakkaalle,
