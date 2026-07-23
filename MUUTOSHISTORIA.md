@@ -1,18 +1,19 @@
-# AEO/SEO-työkalun muutoshistoria: v3 → v4 → v5 → v6
+# AEO/SEO-työkalun muutoshistoria: v3 → v4 → v5 → v6 → v7
 
 *Päivitetty 23.7.2026 · Kaikki versiot repossa rinnakkain — vanhoja ei muokata, uusin on käytössä.*
 
 ## Yhdellä silmäyksellä
 
-| | **v3** | **v4** | **v5** | **v6** |
-|---|---|---|---|---|
-| **Julkaistu** | 13.7.2026 (`8a3cd38`) | 13.7.2026 (`2f10f14`) | 13.7.2026 (`93aa37e`) | 23.7.2026 |
-| **Teema** | Luotettavuus ja selkokielisyys | Ravintolat ja AEO-tiedostot | Klar-yhteensopivuus | Korjauspaketti ja julkaisukunto |
-| **Tarkistuksia per sivu** | 15 | 16 (+ ravintolatarkistus) | 18 (+ funnel ja widget) | 18 |
-| **Sivustotason tarkistuksia** | – | 3 (robots, sitemap, llms.txt) | 3 | 5 (+ domain ja AI-botit) |
-| **Auditoi verkosta** | 1 sivu | 1 sivu | jopa 10 sivua (ryömintä) | jopa 10 sivua |
-| **Klar-vienti** | – | – | ✅ `--klar-json` | ✅ |
-| **Korjauspaketti asiakkaalle** | – | – | – | ✅ `--fix-guide` |
+| | **v3** | **v4** | **v5** | **v6** | **v7** |
+|---|---|---|---|---|---|
+| **Julkaistu** | 13.7.2026 (`8a3cd38`) | 13.7.2026 (`2f10f14`) | 13.7.2026 (`93aa37e`) | 23.7.2026 (`30513d1`) | 23.7.2026 |
+| **Teema** | Luotettavuus ja selkokielisyys | Ravintolat ja AEO-tiedostot | Klar-yhteensopivuus | Korjauspaketti ja julkaisukunto | Kuukausiraportointi |
+| **Tarkistuksia per sivu** | 15 | 16 (+ ravintolatarkistus) | 18 (+ funnel ja widget) | 18 | 18 |
+| **Sivustotason tarkistuksia** | – | 3 (robots, sitemap, llms.txt) | 3 | 5 (+ domain ja AI-botit) | 5 |
+| **Auditoi verkosta** | 1 sivu | 1 sivu | jopa 10 sivua (ryömintä) | jopa 10 sivua | jopa 10 sivua |
+| **Klar-vienti** | – | – | ✅ `--klar-json` | ✅ | ✅ |
+| **Korjauspaketti asiakkaalle** | – | – | – | ✅ `--fix-guide` | ✅ |
+| **Kehitysvertailu** | – | – | – | – | ✅ `--compare` |
 
 ## v3 — Luotettavuus ja selkokielisyys *(pohjaversio)*
 
@@ -116,6 +117,36 @@ julkaisukunto-tarkistukset.*
 Klar-JSON fixture-sivustolla); title-fixerin idempotenssi tupla-ajolla; korjauspaketin
 snippettien vastaavuus korjattuihin kopioihin sivu sivulta; alustatunnistuksen neljä
 tapausta; AI-bot-jäsentimen 9 syötetapausta ja domain-tarkistuksen 4 tapausta.
+
+## v7 — Kuukausiraportointi
+
+*Tausta: Kim myy kuukausipaketteja, joissa asiakkaalle raportoidaan SEO/AEO-tilanteen
+kehitys kuukausittain. Työkalu tuotti jo täydet audit-JSONit, mutta ei osannut
+verrata kahta eri ajankohtina ajettua audittia.*
+
+**Uutta:**
+
+1. **Ennen/jälkeen-vertailu** (`--compare vanha_audit.json`) — ajaa normaalin
+   auditin (repo- tai URL-tila, yhdistettävissä --fix/--fix-guiden kanssa) ja
+   vertaa tulosta aiempaan audit-JSONiin. Muutosluokat statussiirtymistä:
+   parannus (fail/warn → pass, fail → warn), huononnus (warn → fail) ja uusi
+   puute (pass → warn/fail).
+2. **Kehitysraportti asiakkaalle** — `reports/vertailu_*/`-kansioon VERTAILU.html
+   (vaalea Anglés-tyyli; iso ennen→jälkeen-pistenäkymä päiväyksineen kärjessä,
+   parannukset selkokielellä, "korjataan seuraavaksi" -lista rakentavaan sävyyn),
+   VERTAILU.md sähköpostiin ja vertailu.json (score_delta, improved, regressed,
+   new_issues). AI kirjoittaa 2–3 lauseen kehityskuvauksen, jos avain on käytössä.
+3. **Versioturvallinen vertailu** — vanha JSON voi olla v5:n tai v6:n tuottama:
+   tarkistukset, jotka puuttuvat vanhasta ajosta, raportoidaan "uusi tarkistus"
+   -tilassa eivätkä koskaan näy parannuksina tai huononnuksina. Lisäksi lasketaan
+   vertailukelpoinen delta pelkistä yhteisistä tarkistuksista. Kadonneet ja uudet
+   sivut listataan erikseen — vertailu ei kaadu sivumuutoksiin.
+
+**Testattu:** vanhojen tarkistusten regressio v6:ta vasten (identtiset tulokset
+fixturella, myös OHJEET.html tyylirefaktoroinnin jälkeen); vertailulogiikan 8
+yksikkötestiä; päästä päähän -ajo (audit → käsinkorjaus → vertailu näytti täsmälleen
+tehdyt parannukset, +8 p); v5-JSON vertailusyötteenä (julkaisukunto "uusi tarkistus"
+-tilassa, 0 väärää parannusta, vertailukelpoinen delta 0); sivun poisto/lisäys.
 
 ## Tärkeät periaatteet (kaikki versiot)
 

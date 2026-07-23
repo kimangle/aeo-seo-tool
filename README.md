@@ -2,7 +2,7 @@
 
 Auditoi ja korjaa verkkosivuston SEO:n (hakukonenäkyvyys) ja AEO:n
 (näkyvyys tekoälyhauissa kuten ChatGPT ja Perplexity). Uusin versio on
-`aeo_seo_tool_v6.py` — v1–v5 ovat mukana vertailun vuoksi.
+`aeo_seo_tool_v7.py` — v1–v6 ovat mukana vertailun vuoksi.
 
 ## Asennus
 
@@ -15,16 +15,19 @@ export ANTHROPIC_API_KEY=sk-ant-...   # tarvitaan vain AI-korjauksiin (--fix)
 
 ```bash
 # Auditoi paikallinen sivusto (HTML-tiedostot hakemistossa)
-python3 aeo_seo_tool_v6.py --repo ./sivusto
+python3 aeo_seo_tool_v7.py --repo ./sivusto
 
 # Auditoi ja korjaa automaattisesti (AI kirjoittaa mm. titlet ja meta descriptionit)
-python3 aeo_seo_tool_v6.py --repo ./sivusto --fix
+python3 aeo_seo_tool_v7.py --repo ./sivusto --fix
 
 # Auditoi julkinen URL
-python3 aeo_seo_tool_v6.py --url https://example.com
+python3 aeo_seo_tool_v7.py --url https://example.com
 
 # Auditoi julkinen URL ja kokoa asiakkaalle korjauspaketti ohjeineen
-python3 aeo_seo_tool_v6.py --url https://example.com --fix-guide
+python3 aeo_seo_tool_v7.py --url https://example.com --fix-guide
+
+# Kuukausiraportti: vertaa aiempaan audit-JSONiin ja tuota kehitysraportti
+python3 aeo_seo_tool_v7.py --url https://example.com --compare reports/audit_v6_esimerkki.json
 
 # Hyödyllisiä lippuja
 #   --no-open              älä avaa HTML-raporttia selaimeen
@@ -32,6 +35,19 @@ python3 aeo_seo_tool_v6.py --url https://example.com --fix-guide
 #   --site-url https://... sivuston osoite
 #   --eur-rate 0.90        USD→EUR-kurssi kustannuslaskentaan
 ```
+
+## Uutta v7:ssä
+
+**Ennen/jälkeen-vertailuraportti** (`--compare vanha_audit.json`) —
+kuukausipakettien raportointiin. Ajaa normaalin auditin ja vertaa tulosta
+aiempaan audit-JSONiin: pistekehitys, mitkä tarkistukset paranivat, mitkä
+puutteet ilmestyivät ja mitä korjataan seuraavaksi. Tuottaa
+`reports/vertailu_*/`-kansioon asiakkaalle luovutettavan **VERTAILU.html**:n
+(vaalea Anglés-tyyli), markdown-version sähköpostiin ja JSON-yhteenvedon
+(`score_delta`, `improved`, `regressed`, `new_issues`). Toimii myös eri
+työkaluversioiden yli: uudemmat tarkistukset raportoidaan "uusi tarkistus"
+-tilassa eivätkä koskaan vääristä vertailua; kadonneet ja uudet sivut
+listataan erikseen.
 
 ## Uutta v6:ssa
 
