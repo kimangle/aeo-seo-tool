@@ -3433,6 +3433,11 @@ def audit_repo(repo: Path, fix: bool, out: Path, site_args: SiteContext, open_re
 
 # ── URL-ajuri ────────────────────────────────────────────────────────────────
 
+class AuditFetchError(RuntimeError):
+    """V8: aloitussivun haku epäonnistui. CLI nappaa tämän ja kaataa ajon
+    entiseen tapaan; web-käyttö (run_audit) saa poikkeuksen käsiteltäväksi."""
+
+
 def _fetch_url(url: str, attempts: int = 3) -> str:
     """Hakee sivun HTML:n. Uudelleenyrittää verkko- ja palvelinvirheet (5xx),
     ei asiakasvirheitä (4xx). Selkeät suomenkieliset virheilmoitukset."""
@@ -3444,14 +3449,14 @@ def _fetch_url(url: str, attempts: int = 3) -> str:
             if resp.status_code >= 500:
                 last_error = f"Palvelin vastasi virheellä HTTP {resp.status_code}"
             elif resp.status_code >= 400:
-                _err(f"Sivua ei voitu hakea: HTTP {resp.status_code} "
-                     f"({'sivua ei löydy' if resp.status_code == 404 else 'pääsy estetty tai virheellinen pyyntö'}) — {url}")
-                sys.exit(1)
+                raise AuditFetchError(
+                    f"Sivua ei voitu hakea: HTTP {resp.status_code} "
+                    f"({'sivua ei löydy' if resp.status_code == 404 else 'pääsy estetty tai virheellinen pyyntö'}) — {url}")
             else:
                 return resp.text
         except requests.exceptions.SSLError:
-            _err(f"SSL-varmennevirhe osoitteessa {url} — sivuston varmenne voi olla vanhentunut")
-            sys.exit(1)
+            raise AuditFetchError(
+                f"SSL-varmennevirhe osoitteessa {url} — sivuston varmenne voi olla vanhentunut")
         except requests.exceptions.Timeout:
             last_error = "Aikakatkaisu (sivu ei vastannut 20 sekunnissa)"
         except requests.exceptions.ConnectionError:
@@ -3462,8 +3467,8 @@ def _fetch_url(url: str, attempts: int = 3) -> str:
             wait = 2 * attempt
             _warn(f"{last_error} — yritetään uudelleen {wait} s kuluttua ({attempt}/{attempts - 1})")
             time.sleep(wait)
-    _err(f"Sivun haku epäonnistui {attempts} yrityksen jälkeen: {last_error} — {url}")
-    sys.exit(1)
+    raise AuditFetchError(
+        f"Sivun haku epäonnistui {attempts} yrityksen jälkeen: {last_error} — {url}")
 
 
 def _collect_internal_links(soup, base_url: str, limit: int) -> List[str]:
@@ -3493,38 +3498,117 @@ def _collect_internal_links(soup, base_url: str, limit: int) -> List[str]:
     return found
 
 
-def audit_url(url: str, fix: bool, out: Path, site_args: SiteContext,
-              max_pages: int = 10, klar_json: bool = False, fix_guide: bool = False,
-              compare_old: Optional[dict] = None):
-    _hdr(f"AEO/SEO Audit v{VERSION} — {url}")
-    html = _fetch_url(url)
-
-    parser = "lxml" if _has_lxml() else "html.parser"
-    url_soup = BeautifulSoup(html, parser)
-
+def _crawl_site(url: str, html: str, parser: str, max_pages: int,
+                verbose: bool = False) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """V5-ryömintä eriytettynä (V8): aloitussivu + sisäiset alasivut.
+    Palauttaa (pages, page_urls) tiedostonimellä avainnettuna."""
     def fname_of(u: str) -> str:
         f = urlparse(u).path.strip("/").replace("/", "_") or "index"
         return re.sub(r"\.html?$", "", f) + ".html"
 
-    # V5: monisivuinen ryömintä — kerätään sivuston omat linkit aloitussivulta
     pages: Dict[str, str] = {fname_of(url): html}
     page_urls: Dict[str, str] = {fname_of(url): url}
     if max_pages > 1:
         import time
-        links = _collect_internal_links(url_soup, url, max_pages - 1)
-        if links:
+        links = _collect_internal_links(BeautifulSoup(html, parser), url, max_pages - 1)
+        if links and verbose:
             _info(f"Ryömitään {len(links)} alasivua (kohteliaasti 0,5 s välein)...")
         for link in links:
             time.sleep(0.5)
             sub = _fetch_optional(link)
             if sub is None:
-                _warn(f"Alasivua ei voitu hakea: {link} — ohitetaan")
+                if verbose:
+                    _warn(f"Alasivua ei voitu hakea: {link} — ohitetaan")
                 continue
             fn = fname_of(link)
             if fn in pages:
                 continue
             pages[fn] = sub
             page_urls[fn] = link
+    return pages, page_urls
+
+
+def top_findings(results: Dict[str, List[Check]], n: int = 5) -> List[dict]:
+    """V8: tärkeimmät ei-läpäisseet tarkistukset selkokielellä web-teaseria
+    varten — fail ennen warnia, suurin menetetty pistemäärä ensin, sama
+    tarkistus vain kerran vaikka se kaatuisi usealla sivulla."""
+    flat = [c for chs in results.values() for c in chs if c.status != "pass"]
+    flat.sort(key=lambda c: (0 if c.status == "fail" else 1, -(c.max_score - c.score)))
+    seen: Set[str] = set()
+    out: List[dict] = []
+    for c in flat:
+        if c.name in seen:
+            continue
+        seen.add(c.name)
+        out.append({"name": plain_name(c.name), "message": c.message,
+                    "status": c.status, "category": c.category})
+        if len(out) >= n:
+            break
+    return out
+
+
+def run_audit(url: str, max_pages: int = 3,
+              site_args: Optional[SiteContext] = None) -> dict:
+    """V8: ohjelmallinen entry point web-/API-käyttöön — ryömi, auditoi ja
+    palauta tulos dictinä. Ei tulosteita raporttitiedostoihin, ei korjauksia,
+    ei AI-kutsuja. Epäonnistunut haku nostaa AuditFetchErrorin."""
+    html = _fetch_url(url)
+    parser = "lxml" if _has_lxml() else "html.parser"
+    pages, page_urls = _crawl_site(url, html, parser, max_pages)
+    soups = {fn: BeautifulSoup(h, parser) for fn, h in pages.items()}
+
+    sa = site_args or SiteContext()
+    site = detect_site_context(list(soups.values()), sa.url or url, sa.name, sa.email)
+    site = merge_cli_site_args(site, sa)
+    if not site.url:
+        parsed = urlparse(url)
+        site.url = f"{parsed.scheme}://{parsed.netloc}"
+
+    results: Dict[str, List[Check]] = {
+        fn: PageAuditor(page_html, url=page_urls[fn], site=site).run()
+        for fn, page_html in pages.items()
+    }
+
+    base_r = (site.url or f"{urlparse(url).scheme}://{urlparse(url).netloc}").rstrip("/")
+    robots_txt = _fetch_optional(f"{base_r}/robots.txt")
+    site_checks = evaluate_site_files(
+        robots_txt,
+        _fetch_optional(f"{base_r}/sitemap.xml"),
+        _fetch_optional(f"{base_r}/llms.txt"),
+    )
+    site_checks += publish_readiness_checks(url, robots_txt)
+    results[SITE_PSEUDO_PAGE] = site_checks
+
+    all_checks = [c for chs in results.values() for c in chs]
+    s, m = scores(all_checks)
+    pct = round(s / m * 100, 1) if m else 0
+
+    return {
+        "tool_version": VERSION,
+        "target": url,
+        "overall_score": pct,
+        "grade": grade(pct),
+        "critical_alerts": collect_critical_alerts(results),
+        "top_findings": top_findings(results),
+        "pages": results_to_pages_dict(results),
+        "page_urls": page_urls,
+        "recommendations": recommendations(all_checks),
+        "site": {"name": site.name, "url": site.url, "type": site.site_type},
+    }
+
+
+def audit_url(url: str, fix: bool, out: Path, site_args: SiteContext,
+              max_pages: int = 10, klar_json: bool = False, fix_guide: bool = False,
+              compare_old: Optional[dict] = None):
+    _hdr(f"AEO/SEO Audit v{VERSION} — {url}")
+    try:
+        html = _fetch_url(url)
+    except AuditFetchError as e:
+        _err(str(e))
+        sys.exit(1)
+
+    parser = "lxml" if _has_lxml() else "html.parser"
+    pages, page_urls = _crawl_site(url, html, parser, max_pages, verbose=True)
 
     soups = {fn: BeautifulSoup(h, parser) for fn, h in pages.items()}
     site = detect_site_context(list(soups.values()),
