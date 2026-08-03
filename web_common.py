@@ -1,11 +1,10 @@
-"""V8: jaettu web-pään logiikka (api/audit.py ja api/lead.py).
+"""V8: jaettu web-pään logiikka (app.py:n reitit).
 
-Anglés Marketingin sivusto on staattinen HTML, joten selain kutsuu näitä
-funktioita suoraan — palvelinpuolen proxyä ei ole. Siksi CORS-rajaus,
-SSRF-esto ja syötteen tarkistus tehdään täällä, ei kutsujassa.
+Anglés Marketingin sivusto on staattinen HTML, joten selain kutsuu tätä
+palvelinta suoraan — proxyä ei ole. Siksi CORS-rajaus, SSRF-esto ja syötteen
+tarkistus tehdään täällä, ei kutsujassa.
 """
 import ipaddress
-import json
 import os
 import socket
 from typing import Optional, Tuple
@@ -18,8 +17,8 @@ DEFAULT_ORIGINS = (
 
 
 def allowed_origins() -> Tuple[str, ...]:
-    """Sallitut kutsujat. ALLOWED_ORIGINS-ympäristömuuttuja (pilkuin) korvaa
-    oletukset — preview-deployta varten."""
+    """Sallitut kutsujat. ALLOWED_ORIGINS-ympäristömuuttuja (pilkuin) lisää
+    oletusten päälle — demo- ja preview-osoitteita varten."""
     raw = os.environ.get("ALLOWED_ORIGINS", "")
     extra = tuple(o.strip().rstrip("/") for o in raw.split(",") if o.strip())
     return DEFAULT_ORIGINS + extra
@@ -64,35 +63,3 @@ def validate_target(raw: str) -> Optional[str]:
         if _ip_is_private(info[4][0]):
             return None
     return u.geturl()
-
-
-def read_json(handler) -> dict:
-    try:
-        length = int(handler.headers.get("content-length") or 0)
-        return json.loads(handler.rfile.read(length) or b"{}")
-    except (ValueError, json.JSONDecodeError):
-        return {}
-
-
-def send_json(handler, code: int, payload: dict, origin: Optional[str] = None):
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    handler.send_response(code)
-    handler.send_header("content-type", "application/json; charset=utf-8")
-    handler.send_header("content-length", str(len(data)))
-    if origin:
-        handler.send_header("access-control-allow-origin", origin)
-        handler.send_header("vary", "Origin")
-    handler.end_headers()
-    handler.wfile.write(data)
-
-
-def send_preflight(handler):
-    origin = cors_origin(handler.headers.get("origin", ""))
-    handler.send_response(204 if origin else 403)
-    if origin:
-        handler.send_header("access-control-allow-origin", origin)
-        handler.send_header("access-control-allow-methods", "POST, OPTIONS")
-        handler.send_header("access-control-allow-headers", "content-type")
-        handler.send_header("access-control-max-age", "86400")
-        handler.send_header("vary", "Origin")
-    handler.end_headers()

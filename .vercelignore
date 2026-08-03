@@ -1,0 +1,11 @@
+# Vain auditointimoottori ja sen web-pää menevät Verceliin.
+# reports/ sisältää oikeaa asiakasdataa (auditoituja sivustokopioita ja
+# asiakasraportteja) — se ei saa koskaan päätyä julkiselle palvelimelle.
+reports/
+legacy/
+klar-console/
+__pycache__/
+*.pyc
+*.md
+.claude/
+.DS_Store
