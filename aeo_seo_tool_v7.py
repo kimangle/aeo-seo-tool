@@ -147,6 +147,60 @@ PLAIN_FI = {
 def plain_name(check_name: str) -> str:
     return PLAIN_FI.get(check_name, (check_name, ""))[0]
 
+# ── V8: SOT (Source of Truth) — mihin kunkin tarkistuksen pisteytys perustuu ─
+# Jokainen tarkistus viittaa julkiseen dokumentaatioon tai standardiin, jotta
+# asiakkaalle voi osoittaa, ettei pisteytys ole mielipide. Tyhjä URL tarkoittaa
+# Anglésin omaa kriteeriä — se sanotaan raportissa suoraan, ei piilotella.
+SOURCES: Dict[str, Tuple[str, str]] = {
+    "Title-tägi": ("Google Search Central — Title links",
+        "https://developers.google.com/search/docs/appearance/title-link"),
+    "Meta Description": ("Google Search Central — Snippets",
+        "https://developers.google.com/search/docs/appearance/snippet"),
+    "Canonical-tägi": ("Google Search Central — Canonicalization",
+        "https://developers.google.com/search/docs/crawling-indexing/consolidate-duplicate-urls"),
+    "Robots Meta": ("Google Search Central — Robots meta -tägi",
+        "https://developers.google.com/search/docs/crawling-indexing/robots-meta-tag"),
+    "HTML lang-attribuutti": ("W3C — Language declarations",
+        "https://www.w3.org/International/questions/qa-html-language-declarations"),
+    "H1-otsikko": ("Google — SEO Starter Guide",
+        "https://developers.google.com/search/docs/fundamentals/seo-starter-guide"),
+    "Otsikkorakenne": ("W3C WAI — Page structure: Headings",
+        "https://www.w3.org/WAI/tutorials/page-structure/headings/"),
+    "Kuvien alt-tekstit": ("Google — Image SEO best practices",
+        "https://developers.google.com/search/docs/appearance/google-images"),
+    "Open Graph": ("Open Graph -protokolla", "https://ogp.me/"),
+    "Twitter/X Card": ("X Developer — Cards markup",
+        "https://developer.x.com/en/docs/x-for-websites/cards/overview/abouts-cards"),
+    "JSON-LD / Structured Data": ("Google — Structured data intro",
+        "https://developers.google.com/search/docs/appearance/structured-data/intro-structured-data"),
+    "AEO-sisältösignaalit": ("Google — Creating helpful content",
+        "https://developers.google.com/search/docs/fundamentals/creating-helpful-content"),
+    "Auktoriteetti & luottamus": ("Google — E-E-A-T (Helpful content)",
+        "https://developers.google.com/search/docs/fundamentals/creating-helpful-content"),
+    "Sisällön laatu": ("Google — Creating helpful content",
+        "https://developers.google.com/search/docs/fundamentals/creating-helpful-content"),
+    "Sisäiset linkit": ("Google — Make your links crawlable",
+        "https://developers.google.com/search/docs/crawling-indexing/links-crawlable"),
+    "Ravintolan tiedot (schema)": ("Google — Local business structured data",
+        "https://developers.google.com/search/docs/appearance/structured-data/local-business"),
+    "robots.txt": ("Google — Introduction to robots.txt",
+        "https://developers.google.com/search/docs/crawling-indexing/robots/intro"),
+    "sitemap.xml": ("Sitemaps.org-protokolla", "https://www.sitemaps.org/protocol.html"),
+    "llms.txt": ("llms.txt-ehdotus", "https://llmstxt.org/"),
+    "Toimintapolku (funnel)": ("Anglés Marketing — oma konversiokriteeri", ""),
+    "Varauswidget": ("Anglés Marketing — oma konversiokriteeri", ""),
+    "Oma domain": ("Anglés Marketing — oma julkaisukriteeri", ""),
+    "AI-bottien pääsy": ("OpenAI — Bots ja robots.txt (myös Anthropic, Perplexity)",
+        "https://platform.openai.com/docs/bots"),
+}
+
+def check_source(check_name: str) -> Optional[dict]:
+    """V8 SOT: tarkistuksen lähdeviite, tai None jos nimeä ei tunneta."""
+    s = SOURCES.get(check_name)
+    if not s:
+        return None
+    return {"label": s[0], "url": s[1] or None}
+
 # ── Tietorakenteet ──────────────────────────────────────────────────────────
 
 @dataclass
@@ -2007,11 +2061,21 @@ def generate_html_report(
   <div class="ai-recs">{paras}</div>
 </div>"""
 
-    # Sanasto selkokielisistä termeistä
+    # Sanasto selkokielisistä termeistä + V8 SOT-lähdeviite per tarkistus
+    def _src_cell(tech: str) -> str:
+        s = check_source(tech)
+        if not s:
+            return "<td>—</td>"
+        if s["url"]:
+            return (f"<td><a href='{esc(s['url'])}' style='color:#7dd3fc' "
+                    f"target='_blank' rel='noopener'>{esc(s['label'])}</a></td>")
+        return f"<td>{esc(s['label'])}</td>"
+
     glossary_rows = "".join(
         f"<tr><td style='font-weight:600;color:#f1f5f9;white-space:nowrap'>{esc(pn)}</td>"
         f"<td class='filename' style='vertical-align:middle'>{esc(tech)}</td>"
-        f"<td>{esc(expl)}</td></tr>"
+        f"<td>{esc(expl)}</td>"
+        f"{_src_cell(tech)}</tr>"
         for tech, (pn, expl) in PLAIN_FI.items()
     )
 
@@ -2143,9 +2207,9 @@ footer{{text-align:center;padding:32px;color:#334155;font-size:.72rem;border-top
 </div>
 
 <div class="sec">
-  <div class="sec-t">Sanasto — mitä tarkistukset tarkoittavat</div>
+  <div class="sec-t">Sanasto ja pisteytyksen lähteet (SOT) — mihin tarkistukset perustuvat</div>
   <table>
-    <thead><tr><th>Tarkistus</th><th>Tekninen termi</th><th>Selitys</th></tr></thead>
+    <thead><tr><th>Tarkistus</th><th>Tekninen termi</th><th>Selitys</th><th>Lähde</th></tr></thead>
     <tbody>{glossary_rows}</tbody>
   </table>
 </div>
@@ -2178,7 +2242,8 @@ def results_to_pages_dict(results: Dict[str, List[Check]]) -> dict:
             "grade": grade(score_pct(chs)),
             "checks": [{"name": c.name, "category": c.category,
                         "score": c.score, "max": c.max_score,
-                        "status": c.status, "message": c.message} for c in chs]
+                        "status": c.status, "message": c.message,
+                        "source": check_source(c.name)} for c in chs]
         }
         for fname, chs in results.items()
     }
@@ -2267,6 +2332,18 @@ def save_reports(
         for c in chs:
             lines.append(f"| {ICONS.get(c.status, '?').strip()} | {md_esc(plain_name(c.name))} "
                          f"| {c.score}/{c.max_score} | {md_esc(c.message)} |")
+    # V8 SOT: lähdeviitteet raportissa esiintyville tarkistuksille
+    src_lines = []
+    for nm in sorted({c.name for chs in results.values() for c in chs}):
+        s = check_source(nm)
+        if not s:
+            continue
+        src_lines.append(f"- **{plain_name(nm)}** — [{s['label']}]({s['url']})" if s["url"]
+                         else f"- **{plain_name(nm)}** — {s['label']}")
+    if src_lines:
+        lines += ["", "## Pisteytyksen lähteet (SOT)", "",
+                  "Pisteytys ei ole mielipide: jokainen tarkistus perustuu alla "
+                  "mainittuun julkiseen ohjeeseen tai standardiin.", ""] + src_lines
     if ai_summary:
         lines += ["", "## Yhteenveto ja tärkeimmät toimenpiteet", "", ai_summary]
     if all_fixes:
@@ -3541,7 +3618,8 @@ def top_findings(results: Dict[str, List[Check]], n: int = 5) -> List[dict]:
             continue
         seen.add(c.name)
         out.append({"name": plain_name(c.name), "message": c.message,
-                    "status": c.status, "category": c.category})
+                    "status": c.status, "category": c.category,
+                    "source": check_source(c.name)})
         if len(out) >= n:
             break
     return out
