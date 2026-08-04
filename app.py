@@ -13,7 +13,7 @@ import re
 
 import requests
 
-from aeo_seo_tool_v7 import AuditFetchError, run_audit
+from aeo_seo_tool_v7 import AuditFetchError, grade, run_audit
 from web_common import allowed_origins, cors_origin, validate_target
 
 MAX_PAGES = 3
@@ -113,6 +113,9 @@ def _lead(environ, start_response, origin):
                 # round, ei int: sivu näyttää pyöristetyn luvun, ja sähköpostissa
                 # on oltava sama luku jonka asiakas näki (40.8 -> 41, ei 40)
                 "audit_score": str(round(float(body.get("score") or 0))),
+                # arvosana lasketaan samalla asteikolla kuin raporteissa, jotta
+                # sähköpostissa ei lue kiinteää arvosanaa jokaiselle
+                "audit_grade": grade(float(body.get("score") or 0)),
                 "audit_source": str(body.get("source", ""))[:100],
             },
         })
