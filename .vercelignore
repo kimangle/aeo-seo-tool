@@ -4,6 +4,8 @@
 reports/
 legacy/
 klar-console/
+# sql/ ajetaan käsin Supabasen editorissa — funktio ei lue sitä ajossa
+sql/
 __pycache__/
 *.pyc
 *.md
