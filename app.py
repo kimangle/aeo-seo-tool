@@ -1,9 +1,10 @@
-"""V8: audit-api — WSGI-sovellus, joka tarjoaa SEO-testin kaksi reittiä.
+"""V8: audit-api — WSGI-sovellus, joka tarjoaa SEO-testin ja lomakkeen reitit.
 
-  POST /api/audit  — auditoi annetun sivuston ja palauttaa pisteet + löydökset
-  POST /api/lead   — tallentaa liidin MailerLiteen (vaatii suostumuksen)
+  POST /api/audit    — auditoi annetun sivuston ja palauttaa pisteet + löydökset
+  POST /api/lead     — tallentaa liidin MailerLiteen (vaatii suostumuksen)
+  POST /api/contact  — yhteydenotto: tilaaja MailerLiteen + ilmoitus Kimille
 
-Kutsutaan suoraan anglesmarketing.fi:n staattiselta seo-testi-sivulta.
+Kutsutaan suoraan anglesmarketing.fi:n staattiselta sivustolta.
 Tähän palveluun EI aseteta ANTHROPIC_API_KEYtä: auditointi ajaa puhtaana
 sääntömoottorina, jolloin julkisen pään ajokohtainen kustannus on nolla.
 """
@@ -13,6 +14,7 @@ import re
 
 import requests
 
+import notify
 from aeo_seo_tool_v7 import AuditFetchError, grade, run_audit
 from web_common import allowed_origins, cors_origin, validate_target
 
@@ -128,6 +130,88 @@ def _lead(environ, start_response, origin):
     return _json_response(start_response, 200, {"ok": True}, origin)
 
 
+def _contact_to_mailerlite(lead):
+    """Tilaaja yhteydenottoryhmään. Oma ryhmänsä SEO-testin ryhmästä erillään:
+    eri viesti, eri automaatio. Palauttaa True/False eikä koskaan nosta
+    poikkeusta — kutsuja jatkaa ilmoitusmailiin myös epäonnistuessa."""
+    key = os.environ.get("MAILERLITE_API_KEY", "")
+    group = os.environ.get("MAILERLITE_CONTACT_GROUP_ID", "")
+    if not key or not group:
+        return False
+    try:
+        resp = requests.post(MAILERLITE_URL, timeout=15, headers={
+            "authorization": f"Bearer {key}",
+        }, json={
+            "email": lead["email"],
+            "groups": [group],
+            "fields": {
+                "contact_nimi": lead["nimi"][:120],
+                "contact_ala": lead["ala"][:200],
+                "contact_paketti": lead["paketti"][:200],
+                # Katkaistu: koko viesti menee ilmoitusmailissa, ja MailerLiten
+                # tekstikenttä on lyhyt — vapaata tekstiä ei lueta sieltä
+                "contact_viesti": lead["viesti"][:255],
+                "contact_source": lead["source"][:100],
+            },
+        })
+        return resp.status_code in (200, 201)
+    except requests.RequestException:
+        return False
+
+
+def _contact(environ, start_response, origin):
+    """Yhteydenottolomake. Järjestys: honeypot -> tarkistus -> MailerLite ->
+    ilmoitus. MailerLiten epäonnistuminen EI kaada pyyntöä: maili lähtee silti
+    ja vastaus on 200, koska liidi Kimin postilaatikossa voittaa 500:n
+    asiakkaan selaimessa. Vasta jos molemmat epäonnistuvat tulee 502, jotta
+    lomake näyttää virhetilansa eikä valehtele onnistumisesta."""
+    body = _read_json(environ)
+
+    # Honeypot ennen kaikkea muuta: botille "onnistuminen" ilman MailerLite-
+    # kutsua ja ilman mailia. Kaksi nimeä, koska lomake kantoi aiemmin
+    # Netlifyn bot-field-konventiota.
+    if body.get("website") or body.get("bot-field"):
+        return _json_response(start_response, 202, {"ok": True}, origin)
+
+    nimi = str(body.get("nimi") or body.get("name") or "").strip()
+    email = str(body.get("email") or "").strip()
+    viesti = str(body.get("viesti") or body.get("message") or "").strip()
+    ala = str(body.get("ala") or "").strip()
+    paketti = str(body.get("paketti") or "").strip()
+
+    if not 1 <= len(nimi) <= 120:
+        return _json_response(start_response, 400, {"error": "Kerro nimesi"}, origin)
+    if not EMAIL_RE.match(email):
+        return _json_response(start_response, 400,
+                              {"error": "Tarkista sähköpostiosoite"}, origin)
+    if len(viesti) > 4000:
+        return _json_response(start_response, 400,
+                              {"error": "Viesti on liian pitkä — enintään 4000 merkkiä"},
+                              origin)
+    if len(ala) > 200 or len(paketti) > 200:
+        return _json_response(start_response, 400,
+                              {"error": "Ala tai paketti on liian pitkä"}, origin)
+
+    lead = {
+        "nimi": nimi,
+        "email": email,
+        "ala": ala,
+        "paketti": paketti,
+        "viesti": viesti,
+        "source": str(body.get("source") or "yhteystiedot")[:100],
+    }
+
+    subscribed = _contact_to_mailerlite(lead)
+    # Ilmoitus yritetään aina, myös kun MailerLite kaatui: vapaa viesti on juuri
+    # tämän mailin pointti, koska Kim ei lue viestikenttiä MailerLitesta
+    notified = notify.contact_lead(lead) == "ok"
+    if not subscribed and not notified:
+        return _json_response(start_response, 502, {
+            "error": "Viestin lähetys epäonnistui — yritä hetken kuluttua uudelleen"
+        }, origin)
+    return _json_response(start_response, 200, {"ok": True}, origin)
+
+
 def _health(start_response):
     """Kertoo onko palvelu konfiguroitu — ei koskaan arvoja, vain onko asetettu.
     Ilman tätä väärä tai puuttuva avain näkyy vain geneerisenä 503:na."""
@@ -138,6 +222,10 @@ def _health(start_response):
         "mailerlite_key_set": bool(key),
         "mailerlite_key_len": len(key),
         "mailerlite_group_set": bool(group),
+        "mailerlite_contact_group_set": bool(
+            os.environ.get("MAILERLITE_CONTACT_GROUP_ID", "")),
+        "notify_configured": bool(os.environ.get("RESEND_API_KEY", "")
+                                  and os.environ.get("NOTIFY_EMAIL", "")),
         "allowed_origins": len(allowed_origins()),
         "anthropic_key_set": bool(os.environ.get("ANTHROPIC_API_KEY", "")),
     })
@@ -152,11 +240,12 @@ def app(environ, start_response):
         return _health(start_response)
     if method == "OPTIONS":
         return _preflight(start_response, origin)
-    if path not in ("/api/audit", "/api/lead"):
+    routes = {"/api/audit": _audit, "/api/lead": _lead, "/api/contact": _contact}
+    if path not in routes:
         return _json_response(start_response, 404, {"error": "not found"})
     if method != "POST":
         return _json_response(start_response, 404, {"error": "not found"})
     if not origin:
         return _json_response(start_response, 403, {"error": "forbidden"})
 
-    return (_audit if path == "/api/audit" else _lead)(environ, start_response, origin)
+    return routes[path](environ, start_response, origin)
