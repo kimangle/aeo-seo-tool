@@ -110,7 +110,9 @@ def _lead(environ, start_response, origin):
             "groups": [group],
             "fields": {
                 "audit_site_url": str(body.get("siteUrl", ""))[:255],
-                "audit_score": str(int(float(body.get("score") or 0))),
+                # round, ei int: sivu näyttää pyöristetyn luvun, ja sähköpostissa
+                # on oltava sama luku jonka asiakas näki (40.8 -> 41, ei 40)
+                "audit_score": str(round(float(body.get("score") or 0))),
                 "audit_source": str(body.get("source", ""))[:100],
             },
         })
