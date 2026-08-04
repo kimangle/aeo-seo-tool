@@ -13,3 +13,9 @@ fixed_v*.html
 
 # Erillinen projekti (oma git-repo)
 klar-console/
+.vercel
+
+# Ympäristömuuttujat — API-avaimet eivät kuulu versionhallintaan
+.env
+.env.*
+.vercel

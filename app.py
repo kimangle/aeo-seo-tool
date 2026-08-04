@@ -14,7 +14,7 @@ import re
 import requests
 
 from aeo_seo_tool_v7 import AuditFetchError, run_audit
-from web_common import cors_origin, validate_target
+from web_common import allowed_origins, cors_origin, validate_target
 
 MAX_PAGES = 3
 RESPONSE_KEYS = ("tool_version", "overall_score", "grade", "critical_alerts",
@@ -123,11 +123,28 @@ def _lead(environ, start_response, origin):
     return _json_response(start_response, 200, {"ok": True}, origin)
 
 
+def _health(start_response):
+    """Kertoo onko palvelu konfiguroitu — ei koskaan arvoja, vain onko asetettu.
+    Ilman tätä väärä tai puuttuva avain näkyy vain geneerisenä 503:na."""
+    key = os.environ.get("MAILERLITE_API_KEY", "")
+    group = os.environ.get("MAILERLITE_GROUP_ID", "")
+    return _json_response(start_response, 200, {
+        "audit": "ok",
+        "mailerlite_key_set": bool(key),
+        "mailerlite_key_len": len(key),
+        "mailerlite_group_set": bool(group),
+        "allowed_origins": len(allowed_origins()),
+        "anthropic_key_set": bool(os.environ.get("ANTHROPIC_API_KEY", "")),
+    })
+
+
 def app(environ, start_response):
     path = environ.get("PATH_INFO", "").rstrip("/")
     method = environ.get("REQUEST_METHOD", "GET")
     origin = cors_origin(environ.get("HTTP_ORIGIN", ""))
 
+    if method == "GET" and path == "/api/health":
+        return _health(start_response)
     if method == "OPTIONS":
         return _preflight(start_response, origin)
     if path not in ("/api/audit", "/api/lead"):
