@@ -147,6 +147,60 @@ PLAIN_FI = {
 def plain_name(check_name: str) -> str:
     return PLAIN_FI.get(check_name, (check_name, ""))[0]
 
+# ── V8: SOT (Source of Truth) — mihin kunkin tarkistuksen pisteytys perustuu ─
+# Jokainen tarkistus viittaa julkiseen dokumentaatioon tai standardiin, jotta
+# asiakkaalle voi osoittaa, ettei pisteytys ole mielipide. Tyhjä URL tarkoittaa
+# Anglésin omaa kriteeriä — se sanotaan raportissa suoraan, ei piilotella.
+SOURCES: Dict[str, Tuple[str, str]] = {
+    "Title-tägi": ("Google Search Central — Title links",
+        "https://developers.google.com/search/docs/appearance/title-link"),
+    "Meta Description": ("Google Search Central — Snippets",
+        "https://developers.google.com/search/docs/appearance/snippet"),
+    "Canonical-tägi": ("Google Search Central — Canonicalization",
+        "https://developers.google.com/search/docs/crawling-indexing/consolidate-duplicate-urls"),
+    "Robots Meta": ("Google Search Central — Robots meta -tägi",
+        "https://developers.google.com/search/docs/crawling-indexing/robots-meta-tag"),
+    "HTML lang-attribuutti": ("W3C — Language declarations",
+        "https://www.w3.org/International/questions/qa-html-language-declarations"),
+    "H1-otsikko": ("Google — SEO Starter Guide",
+        "https://developers.google.com/search/docs/fundamentals/seo-starter-guide"),
+    "Otsikkorakenne": ("W3C WAI — Page structure: Headings",
+        "https://www.w3.org/WAI/tutorials/page-structure/headings/"),
+    "Kuvien alt-tekstit": ("Google — Image SEO best practices",
+        "https://developers.google.com/search/docs/appearance/google-images"),
+    "Open Graph": ("Open Graph -protokolla", "https://ogp.me/"),
+    "Twitter/X Card": ("X Developer — Cards markup",
+        "https://developer.x.com/en/docs/x-for-websites/cards/overview/abouts-cards"),
+    "JSON-LD / Structured Data": ("Google — Structured data intro",
+        "https://developers.google.com/search/docs/appearance/structured-data/intro-structured-data"),
+    "AEO-sisältösignaalit": ("Google — Creating helpful content",
+        "https://developers.google.com/search/docs/fundamentals/creating-helpful-content"),
+    "Auktoriteetti & luottamus": ("Google — E-E-A-T (Helpful content)",
+        "https://developers.google.com/search/docs/fundamentals/creating-helpful-content"),
+    "Sisällön laatu": ("Google — Creating helpful content",
+        "https://developers.google.com/search/docs/fundamentals/creating-helpful-content"),
+    "Sisäiset linkit": ("Google — Make your links crawlable",
+        "https://developers.google.com/search/docs/crawling-indexing/links-crawlable"),
+    "Ravintolan tiedot (schema)": ("Google — Local business structured data",
+        "https://developers.google.com/search/docs/appearance/structured-data/local-business"),
+    "robots.txt": ("Google — Introduction to robots.txt",
+        "https://developers.google.com/search/docs/crawling-indexing/robots/intro"),
+    "sitemap.xml": ("Sitemaps.org-protokolla", "https://www.sitemaps.org/protocol.html"),
+    "llms.txt": ("llms.txt-ehdotus", "https://llmstxt.org/"),
+    "Toimintapolku (funnel)": ("Anglés Marketing — oma konversiokriteeri", ""),
+    "Varauswidget": ("Anglés Marketing — oma konversiokriteeri", ""),
+    "Oma domain": ("Anglés Marketing — oma julkaisukriteeri", ""),
+    "AI-bottien pääsy": ("OpenAI — Bots ja robots.txt (myös Anthropic, Perplexity)",
+        "https://platform.openai.com/docs/bots"),
+}
+
+def check_source(check_name: str) -> Optional[dict]:
+    """V8 SOT: tarkistuksen lähdeviite, tai None jos nimeä ei tunneta."""
+    s = SOURCES.get(check_name)
+    if not s:
+        return None
+    return {"label": s[0], "url": s[1] or None}
+
 # ── Tietorakenteet ──────────────────────────────────────────────────────────
 
 @dataclass
@@ -2007,11 +2061,21 @@ def generate_html_report(
   <div class="ai-recs">{paras}</div>
 </div>"""
 
-    # Sanasto selkokielisistä termeistä
+    # Sanasto selkokielisistä termeistä + V8 SOT-lähdeviite per tarkistus
+    def _src_cell(tech: str) -> str:
+        s = check_source(tech)
+        if not s:
+            return "<td>—</td>"
+        if s["url"]:
+            return (f"<td><a href='{esc(s['url'])}' style='color:#7dd3fc' "
+                    f"target='_blank' rel='noopener'>{esc(s['label'])}</a></td>")
+        return f"<td>{esc(s['label'])}</td>"
+
     glossary_rows = "".join(
         f"<tr><td style='font-weight:600;color:#f1f5f9;white-space:nowrap'>{esc(pn)}</td>"
         f"<td class='filename' style='vertical-align:middle'>{esc(tech)}</td>"
-        f"<td>{esc(expl)}</td></tr>"
+        f"<td>{esc(expl)}</td>"
+        f"{_src_cell(tech)}</tr>"
         for tech, (pn, expl) in PLAIN_FI.items()
     )
 
@@ -2143,9 +2207,9 @@ footer{{text-align:center;padding:32px;color:#334155;font-size:.72rem;border-top
 </div>
 
 <div class="sec">
-  <div class="sec-t">Sanasto — mitä tarkistukset tarkoittavat</div>
+  <div class="sec-t">Sanasto ja pisteytyksen lähteet (SOT) — mihin tarkistukset perustuvat</div>
   <table>
-    <thead><tr><th>Tarkistus</th><th>Tekninen termi</th><th>Selitys</th></tr></thead>
+    <thead><tr><th>Tarkistus</th><th>Tekninen termi</th><th>Selitys</th><th>Lähde</th></tr></thead>
     <tbody>{glossary_rows}</tbody>
   </table>
 </div>
@@ -2178,7 +2242,8 @@ def results_to_pages_dict(results: Dict[str, List[Check]]) -> dict:
             "grade": grade(score_pct(chs)),
             "checks": [{"name": c.name, "category": c.category,
                         "score": c.score, "max": c.max_score,
-                        "status": c.status, "message": c.message} for c in chs]
+                        "status": c.status, "message": c.message,
+                        "source": check_source(c.name)} for c in chs]
         }
         for fname, chs in results.items()
     }
@@ -2267,6 +2332,18 @@ def save_reports(
         for c in chs:
             lines.append(f"| {ICONS.get(c.status, '?').strip()} | {md_esc(plain_name(c.name))} "
                          f"| {c.score}/{c.max_score} | {md_esc(c.message)} |")
+    # V8 SOT: lähdeviitteet raportissa esiintyville tarkistuksille
+    src_lines = []
+    for nm in sorted({c.name for chs in results.values() for c in chs}):
+        s = check_source(nm)
+        if not s:
+            continue
+        src_lines.append(f"- **{plain_name(nm)}** — [{s['label']}]({s['url']})" if s["url"]
+                         else f"- **{plain_name(nm)}** — {s['label']}")
+    if src_lines:
+        lines += ["", "## Pisteytyksen lähteet (SOT)", "",
+                  "Pisteytys ei ole mielipide: jokainen tarkistus perustuu alla "
+                  "mainittuun julkiseen ohjeeseen tai standardiin.", ""] + src_lines
     if ai_summary:
         lines += ["", "## Yhteenveto ja tärkeimmät toimenpiteet", "", ai_summary]
     if all_fixes:
@@ -3433,6 +3510,11 @@ def audit_repo(repo: Path, fix: bool, out: Path, site_args: SiteContext, open_re
 
 # ── URL-ajuri ────────────────────────────────────────────────────────────────
 
+class AuditFetchError(RuntimeError):
+    """V8: aloitussivun haku epäonnistui. CLI nappaa tämän ja kaataa ajon
+    entiseen tapaan; web-käyttö (run_audit) saa poikkeuksen käsiteltäväksi."""
+
+
 def _fetch_url(url: str, attempts: int = 3) -> str:
     """Hakee sivun HTML:n. Uudelleenyrittää verkko- ja palvelinvirheet (5xx),
     ei asiakasvirheitä (4xx). Selkeät suomenkieliset virheilmoitukset."""
@@ -3444,14 +3526,14 @@ def _fetch_url(url: str, attempts: int = 3) -> str:
             if resp.status_code >= 500:
                 last_error = f"Palvelin vastasi virheellä HTTP {resp.status_code}"
             elif resp.status_code >= 400:
-                _err(f"Sivua ei voitu hakea: HTTP {resp.status_code} "
-                     f"({'sivua ei löydy' if resp.status_code == 404 else 'pääsy estetty tai virheellinen pyyntö'}) — {url}")
-                sys.exit(1)
+                raise AuditFetchError(
+                    f"Sivua ei voitu hakea: HTTP {resp.status_code} "
+                    f"({'sivua ei löydy' if resp.status_code == 404 else 'pääsy estetty tai virheellinen pyyntö'}) — {url}")
             else:
                 return resp.text
         except requests.exceptions.SSLError:
-            _err(f"SSL-varmennevirhe osoitteessa {url} — sivuston varmenne voi olla vanhentunut")
-            sys.exit(1)
+            raise AuditFetchError(
+                f"SSL-varmennevirhe osoitteessa {url} — sivuston varmenne voi olla vanhentunut")
         except requests.exceptions.Timeout:
             last_error = "Aikakatkaisu (sivu ei vastannut 20 sekunnissa)"
         except requests.exceptions.ConnectionError:
@@ -3462,8 +3544,8 @@ def _fetch_url(url: str, attempts: int = 3) -> str:
             wait = 2 * attempt
             _warn(f"{last_error} — yritetään uudelleen {wait} s kuluttua ({attempt}/{attempts - 1})")
             time.sleep(wait)
-    _err(f"Sivun haku epäonnistui {attempts} yrityksen jälkeen: {last_error} — {url}")
-    sys.exit(1)
+    raise AuditFetchError(
+        f"Sivun haku epäonnistui {attempts} yrityksen jälkeen: {last_error} — {url}")
 
 
 def _collect_internal_links(soup, base_url: str, limit: int) -> List[str]:
@@ -3493,38 +3575,118 @@ def _collect_internal_links(soup, base_url: str, limit: int) -> List[str]:
     return found
 
 
-def audit_url(url: str, fix: bool, out: Path, site_args: SiteContext,
-              max_pages: int = 10, klar_json: bool = False, fix_guide: bool = False,
-              compare_old: Optional[dict] = None):
-    _hdr(f"AEO/SEO Audit v{VERSION} — {url}")
-    html = _fetch_url(url)
-
-    parser = "lxml" if _has_lxml() else "html.parser"
-    url_soup = BeautifulSoup(html, parser)
-
+def _crawl_site(url: str, html: str, parser: str, max_pages: int,
+                verbose: bool = False) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """V5-ryömintä eriytettynä (V8): aloitussivu + sisäiset alasivut.
+    Palauttaa (pages, page_urls) tiedostonimellä avainnettuna."""
     def fname_of(u: str) -> str:
         f = urlparse(u).path.strip("/").replace("/", "_") or "index"
         return re.sub(r"\.html?$", "", f) + ".html"
 
-    # V5: monisivuinen ryömintä — kerätään sivuston omat linkit aloitussivulta
     pages: Dict[str, str] = {fname_of(url): html}
     page_urls: Dict[str, str] = {fname_of(url): url}
     if max_pages > 1:
         import time
-        links = _collect_internal_links(url_soup, url, max_pages - 1)
-        if links:
+        links = _collect_internal_links(BeautifulSoup(html, parser), url, max_pages - 1)
+        if links and verbose:
             _info(f"Ryömitään {len(links)} alasivua (kohteliaasti 0,5 s välein)...")
         for link in links:
             time.sleep(0.5)
             sub = _fetch_optional(link)
             if sub is None:
-                _warn(f"Alasivua ei voitu hakea: {link} — ohitetaan")
+                if verbose:
+                    _warn(f"Alasivua ei voitu hakea: {link} — ohitetaan")
                 continue
             fn = fname_of(link)
             if fn in pages:
                 continue
             pages[fn] = sub
             page_urls[fn] = link
+    return pages, page_urls
+
+
+def top_findings(results: Dict[str, List[Check]], n: int = 5) -> List[dict]:
+    """V8: tärkeimmät ei-läpäisseet tarkistukset selkokielellä web-teaseria
+    varten — fail ennen warnia, suurin menetetty pistemäärä ensin, sama
+    tarkistus vain kerran vaikka se kaatuisi usealla sivulla."""
+    flat = [c for chs in results.values() for c in chs if c.status != "pass"]
+    flat.sort(key=lambda c: (0 if c.status == "fail" else 1, -(c.max_score - c.score)))
+    seen: Set[str] = set()
+    out: List[dict] = []
+    for c in flat:
+        if c.name in seen:
+            continue
+        seen.add(c.name)
+        out.append({"name": plain_name(c.name), "message": c.message,
+                    "status": c.status, "category": c.category,
+                    "source": check_source(c.name)})
+        if len(out) >= n:
+            break
+    return out
+
+
+def run_audit(url: str, max_pages: int = 3,
+              site_args: Optional[SiteContext] = None) -> dict:
+    """V8: ohjelmallinen entry point web-/API-käyttöön — ryömi, auditoi ja
+    palauta tulos dictinä. Ei tulosteita raporttitiedostoihin, ei korjauksia,
+    ei AI-kutsuja. Epäonnistunut haku nostaa AuditFetchErrorin."""
+    html = _fetch_url(url)
+    parser = "lxml" if _has_lxml() else "html.parser"
+    pages, page_urls = _crawl_site(url, html, parser, max_pages)
+    soups = {fn: BeautifulSoup(h, parser) for fn, h in pages.items()}
+
+    sa = site_args or SiteContext()
+    site = detect_site_context(list(soups.values()), sa.url or url, sa.name, sa.email)
+    site = merge_cli_site_args(site, sa)
+    if not site.url:
+        parsed = urlparse(url)
+        site.url = f"{parsed.scheme}://{parsed.netloc}"
+
+    results: Dict[str, List[Check]] = {
+        fn: PageAuditor(page_html, url=page_urls[fn], site=site).run()
+        for fn, page_html in pages.items()
+    }
+
+    base_r = (site.url or f"{urlparse(url).scheme}://{urlparse(url).netloc}").rstrip("/")
+    robots_txt = _fetch_optional(f"{base_r}/robots.txt")
+    site_checks = evaluate_site_files(
+        robots_txt,
+        _fetch_optional(f"{base_r}/sitemap.xml"),
+        _fetch_optional(f"{base_r}/llms.txt"),
+    )
+    site_checks += publish_readiness_checks(url, robots_txt)
+    results[SITE_PSEUDO_PAGE] = site_checks
+
+    all_checks = [c for chs in results.values() for c in chs]
+    s, m = scores(all_checks)
+    pct = round(s / m * 100, 1) if m else 0
+
+    return {
+        "tool_version": VERSION,
+        "target": url,
+        "overall_score": pct,
+        "grade": grade(pct),
+        "critical_alerts": collect_critical_alerts(results),
+        "top_findings": top_findings(results),
+        "pages": results_to_pages_dict(results),
+        "page_urls": page_urls,
+        "recommendations": recommendations(all_checks),
+        "site": {"name": site.name, "url": site.url, "type": site.site_type},
+    }
+
+
+def audit_url(url: str, fix: bool, out: Path, site_args: SiteContext,
+              max_pages: int = 10, klar_json: bool = False, fix_guide: bool = False,
+              compare_old: Optional[dict] = None):
+    _hdr(f"AEO/SEO Audit v{VERSION} — {url}")
+    try:
+        html = _fetch_url(url)
+    except AuditFetchError as e:
+        _err(str(e))
+        sys.exit(1)
+
+    parser = "lxml" if _has_lxml() else "html.parser"
+    pages, page_urls = _crawl_site(url, html, parser, max_pages, verbose=True)
 
     soups = {fn: BeautifulSoup(h, parser) for fn, h in pages.items()}
     site = detect_site_context(list(soups.values()),
