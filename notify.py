@@ -1,6 +1,6 @@
 """V8: ilmoitus uudesta liidistä — Resend, yksi requests.post.
 
-Ei uutta riippuvuutta ja ei DNS-työtä päivänä 1: lähettäjänä toimii Resendin
+Lähettäjänä oma verifioitu domain (Resend, eu-west-1). RESEND_FROM voi yhä
 oma onboarding@resend.dev. anglesmarketing.fi-domainin verifiointi on Kimin
 päätös myöhemmin, ja se vaihtaa vain RESEND_FROMin arvon.
 
@@ -13,7 +13,7 @@ from typing import Any, Dict
 import requests
 
 RESEND_URL = "https://api.resend.com/emails"
-DEFAULT_FROM = "Anglés liidit <onboarding@resend.dev>"
+DEFAULT_FROM = "Anglés liidit <liidit@anglesmarketing.fi>"
 TIMEOUT = (2, 5)
 
 
