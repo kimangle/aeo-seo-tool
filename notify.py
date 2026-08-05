@@ -1,8 +1,8 @@
 """V8: ilmoitus uudesta liidistä — Resend, yksi requests.post.
 
-Lähettäjänä oma verifioitu domain (Resend, eu-west-1). RESEND_FROM voi yhä
-oma onboarding@resend.dev. anglesmarketing.fi-domainin verifiointi on Kimin
-päätös myöhemmin, ja se vaihtaa vain RESEND_FROMin arvon.
+Lähettäjänä on anglesmarketing.fi, verifioitu Resendissä (alue eu-west-1,
+Irlanti — henkilötiedot pysyvät EU:ssa). RESEND_FROM voi yhä ohittaa arvon
+ilman koodimuutosta.
 
 Jos RESEND_API_KEY tai NOTIFY_EMAIL puuttuu, ohitetaan hiljaa ja kerrotaan se
 paluuarvossa. Puuttuva konfiguraatio ei ole virhe jonka asiakas näkee.
