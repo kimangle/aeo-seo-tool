@@ -5,6 +5,7 @@ palvelinta suoraan — proxyä ei ole. Siksi CORS-rajaus, SSRF-esto ja syötteen
 tarkistus tehdään täällä, ei kutsujassa.
 """
 import ipaddress
+import json
 import os
 import socket
 from typing import Optional, Tuple
@@ -63,3 +64,44 @@ def validate_target(raw: str) -> Optional[str]:
         if _ip_is_private(info[4][0]):
             return None
     return u.geturl()
+
+
+# ── V8: WSGI-vastaukset (jaettu app.py:n ja dev_console.py:n kesken) ─────────
+
+STATUS = {200: "200 OK", 202: "202 Accepted", 204: "204 No Content",
+          400: "400 Bad Request", 401: "401 Unauthorized", 403: "403 Forbidden",
+          404: "404 Not Found", 422: "422 Unprocessable Entity",
+          500: "500 Internal Server Error", 502: "502 Bad Gateway",
+          503: "503 Service Unavailable"}
+
+
+def json_response(start_response, code, payload, origin=None):
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = [("content-type", "application/json; charset=utf-8"),
+               ("content-length", str(len(body)))]
+    if origin:
+        headers += [("access-control-allow-origin", origin), ("vary", "Origin")]
+    start_response(STATUS[code], headers)
+    return [body]
+
+
+def html_response(start_response, code, html):
+    """Konsolisivu. no-store ja noindex: tämä on sisäinen näkymä, jota ei
+    tallenneta välimuistiin eikä indeksoida hakukoneisiin."""
+    body = html.encode("utf-8")
+    start_response(STATUS[code], [
+        ("content-type", "text/html; charset=utf-8"),
+        ("content-length", str(len(body))),
+        ("cache-control", "no-store"),
+        ("x-robots-tag", "noindex, nofollow"),
+        ("referrer-policy", "no-referrer"),
+    ])
+    return [body]
+
+
+def read_json(environ):
+    try:
+        length = int(environ.get("CONTENT_LENGTH") or 0)
+        return json.loads(environ["wsgi.input"].read(length) or b"{}")
+    except (ValueError, KeyError, json.JSONDecodeError):
+        return {}

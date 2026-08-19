@@ -36,6 +36,34 @@ python3 aeo_seo_tool_v7.py --url https://example.com --compare reports/audit_v6_
 #   --eur-rate 0.90        USD→EUR-kurssi kustannuslaskentaan
 ```
 
+## Kehittäjäkonsoli (`/dev`)
+
+Oma sisäinen näkymä asiakkaisiin: SEO-testin liidit ja yhteydenottolomakkeen
+viestit yhdistettynä sähköpostin perusteella yhdeksi asiakasriviksi.
+
+```
+https://<audit-api-osoite>/dev
+```
+
+Konsolissa näet asiakkaat (nimi, sivusto, SEO-pisteet ja arvosana, ala, paketti,
+vapaa viesti), tilastot (asiakkaita, yhteydenottoja, uusia 7 pv, keskipisteet),
+haun ja suodattimet — ja voit ajaa auditin asiakkaan sivustolle suoraan
+näkymästä. Konsoli vain lukee MailerLitesta, se ei kirjoita sinne mitään.
+
+**Käyttöönotto:** aseta ympäristömuuttuja `DEV_TOKEN` (pitkä satunnainen
+merkkijono). Ilman sitä konsoli on kokonaan pois päältä. Selain kysyy tunnuksen
+kerran ja säilyttää sen vain kyseisessä selaimessa. Sivu on `noindex` eikä
+tallennu välimuistiin. Konfiguraation tilan näet osoitteesta `/api/health`
+(`dev_console_enabled`).
+
+| Muuttuja | Mihin |
+|---|---|
+| `DEV_TOKEN` | konsolin tunnus (pakollinen) |
+| `MAILERLITE_API_KEY` | asiakastietojen luku |
+| `MAILERLITE_GROUP_ID` | SEO-testin liidit |
+| `MAILERLITE_CONTACT_GROUP_ID` | yhteydenotot |
+
+
 ## Uutta v7:ssä
 
 **Ennen/jälkeen-vertailuraportti** (`--compare vanha_audit.json`) —
