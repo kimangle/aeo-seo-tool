@@ -61,7 +61,7 @@ console = Console() if RICH else None
 
 # ── Vakiot ──────────────────────────────────────────────────────────────────
 
-VERSION = "7.0"
+VERSION = "7.1"
 SKIP_DIRS: Set[str] = {
     "node_modules", ".git", "vendor", "dist", "__pycache__",
     "bower_components", ".cache", ".next", "build", "out", ".svn",
@@ -71,6 +71,26 @@ SOCIAL_DOMAINS = (
     "instagram.com", "youtube.com", "tiktok.com", "pinterest.com",
     "threads.net", "bsky.app",
 )
+
+# V7.1: ajanvarauspalvelut — B2B-yritykselle nämä ovat yhtä pätevä suora
+# yhteydenottokanava kuin puhelinnumero
+MEETING_DOMAINS = (
+    "calendly.com", "cal.com", "meetings.hubspot.com", "zcal.co", "savvycal.com",
+)
+
+
+def _is_meeting_link(href: str) -> bool:
+    """V7.1: osoittaako linkki tunnettuun ajanvarauspalveluun?"""
+    try:
+        netloc = urlparse(href).netloc.lower().split(":")[0]
+    except ValueError:
+        return False
+    if not netloc:
+        return False
+    if netloc.startswith("www."):
+        netloc = netloc[4:]
+    return any(netloc == d or netloc.endswith("." + d) for d in MEETING_DOMAINS)
+
 
 # Google Site Verification -tiedostot (esim. google0fcfed6f5a2cbae1.html)
 GOOGLE_VERIFY_RE = re.compile(r"google[0-9a-f]{12,}\.html?$", re.I)
@@ -89,6 +109,45 @@ RESTAURANT_KEYWORDS = (
 )
 # Vähintään näin monta eri avainsanaosumaa ennen kuin sivu tulkitaan ravintolaksi
 RESTAURANT_KEYWORD_THRESHOLD = 3
+
+# V7.1: liiketyypit, jotka EIVÄT ole ruokapaikkoja. Jos sivuston JSON-LD ilmoittaa
+# jonkin näistä, avainsanapohjaista ravintolatunnistusta ei enää ajeta — muuten
+# esim. ravintola-alan ohjelmistoyritys (menu, reservation, book a table -sanat
+# markkinointitekstissä) tulkittaisiin ravintolaksi ja saisi ravintolatarkistukset,
+# joita se ei voi rehellisesti läpäistä.
+# HUOM: tässä EI saa olla paljaita "Organization", "LocalBusiness" tai "Store"
+# -tyyppejä — ne ovat epämääräisiä ja oikeat ravintolat käyttävät niitä usein
+# Restaurant-tyypin rinnalla tai sijasta.
+NON_FOOD_BUSINESS_TYPES = {
+    "ProfessionalService", "LegalService", "FinancialService", "MedicalBusiness",
+    "Dentist", "HealthAndBeautyBusiness", "HairSalon", "BeautySalon",
+    "AutomotiveBusiness", "AutoRepair", "HomeAndConstructionBusiness",
+    "RealEstateAgent", "TravelAgency", "LodgingBusiness", "Hotel",
+    "EmploymentAgency", "EntertainmentBusiness", "SportsActivityLocation",
+    "SoftwareApplication", "Corporation", "EducationalOrganization", "NGO",
+    "GovernmentOrganization", "InsuranceAgency",
+}
+
+# V7.1: kaikki tyypit, jotka kelpaavat "yritys on merkitty koneluettavasti"
+# -pisteeseen JSON-LD-tarkistuksessa. ProfessionalService yms. ovat schema.orgin
+# LocalBusiness-alityyppejä eli täysin valideja yritysmerkintöjä.
+ORG_SCHEMA_TYPES = (
+    {"Organization", "LocalBusiness", "Corporation", "Store"}
+    | NON_FOOD_BUSINESS_TYPES | RESTAURANT_SCHEMA_TYPES
+)
+
+
+def schema_types_of(item) -> List[str]:
+    """V7.1: JSON-LD-solmun @type listana. @type voi olla merkkijono TAI lista
+    (esim. ["Restaurant", "LocalBusiness"]) — vanha koodi rikkoi listamuodon
+    str()-muunnoksella."""
+    if not isinstance(item, dict):
+        return []
+    t = item.get("@type", "")
+    if isinstance(t, list):
+        return [str(x) for x in t if x]
+    return [str(t)] if t else []
+
 
 ICONS  = {"pass": "✅", "warn": "⚠️ ", "fail": "❌"}
 COLORS = {"pass": "green", "warn": "yellow", "fail": "red"}
@@ -225,6 +284,9 @@ class SiteContext:
     lang: str = "fi"
     # V4: ravintolakohtaiset tiedot
     site_type: str = "generic"          # "generic" | "restaurant"
+    # V7.1: sivuston JSON-LD:ssä ilmoitettu ei-ruokapaikka-liiketyyppi
+    # (esim. "ProfessionalService"). Tyhjä = sivusto ei ole ilmoittanut mitään.
+    declared_type: str = ""
     phone: str = ""
     address: str = ""
     opening_hours: List[str] = field(default_factory=list)  # esim. ["Mo-Fr 11:00-22:00"]
@@ -296,8 +358,14 @@ def detect_site_context(soups: List["BeautifulSoup"], cli_url: str = "", cli_nam
                 for item in items:
                     if not isinstance(item, dict):
                         continue
-                    t = item.get("@type", "")
-                    if t in RESTAURANT_SCHEMA_TYPES:
+                    tlist = schema_types_of(item)
+                    # V7.1: sivusto on itse ilmoittanut olevansa muu kuin ruokapaikka
+                    if not ctx.declared_type:
+                        for cand in tlist:
+                            if cand in NON_FOOD_BUSINESS_TYPES:
+                                ctx.declared_type = cand
+                                break
+                    if any(x in RESTAURANT_SCHEMA_TYPES for x in tlist):
                         ctx.site_type = "restaurant"
                         if item.get("telephone") and not ctx.phone:
                             ctx.phone = str(item["telephone"])
@@ -316,7 +384,7 @@ def detect_site_context(soups: List["BeautifulSoup"], cli_url: str = "", cli_nam
                             ctx.opening_hours = oh if isinstance(oh, list) else [str(oh)]
                         if item.get("menu") and not ctx.menu_url:
                             ctx.menu_url = str(item["menu"])
-                    if t in ("Organization", "LocalBusiness", "Corporation") or t in RESTAURANT_SCHEMA_TYPES:
+                    if any(x in ORG_SCHEMA_TYPES for x in tlist):
                         n = item.get("name", "")
                         u = item.get("url", "")
                         e = item.get("email", "")
@@ -383,7 +451,10 @@ def detect_site_context(soups: List["BeautifulSoup"], cli_url: str = "", cli_nam
     for soup in soups:
         body_lower = soup.get_text(" ", strip=True).lower()
 
-        if ctx.site_type != "restaurant":
+        # V7.1: avainsanapäättely vain, jos sivusto ei ole itse ilmoittanut
+        # muuta liiketyyppiä. Ravintola-alan palveluyritys puhuu ruokalistoista
+        # ja pöytävarauksista olematta itse ravintola.
+        if ctx.site_type != "restaurant" and not ctx.declared_type:
             hits = {kw for kw in RESTAURANT_KEYWORDS if kw in body_lower}
             if len(hits) >= RESTAURANT_KEYWORD_THRESHOLD:
                 ctx.site_type = "restaurant"
@@ -439,6 +510,8 @@ def merge_cli_site_args(ctx: SiteContext, cli: SiteContext) -> SiteContext:
     # Ravintolatietojen antaminen käsin kertoo, että kyse on ravintolasta
     if cli.site_type == "restaurant" or cli.cuisine or cli.menu_url:
         ctx.site_type = "restaurant"
+        # V7.1: käsin annettu tieto voittaa myös JSON-LD:n liiketyypin
+        ctx.declared_type = ""
     return ctx
 
 
@@ -858,9 +931,32 @@ class PageAuditor:
         self._content_quality()
         self._internal_links()
         self._funnel()
-        if self.site.is_restaurant():
+        # V7.1: varauswidget vain ravintolasivustolla JA vain sivuilla, joilla
+        # on varausintentio — tietosuojaseloste tai käyttöehdot eivät voi
+        # sisältää varausjärjestelmää, joten niitä ei pisteytetä siitä.
+        if self.site.is_restaurant() and self._has_booking_intent():
             self._booking_widget()
         return self.checks
+
+    def _has_booking_intent(self) -> bool:
+        """V7.1: lupaako tämä sivu pöytävarausta (teksti, varausskripti tai
+        varaus-CTA)? Vain silloin varausmekanismin puute on sivun vika."""
+        body_lower = self._body_text.lower()
+        if any(k in body_lower for k in self.BOOKING_INTENT_TEXT):
+            return True
+        for sc in self.soup.find_all("script", src=True):
+            if re.search(r"booking|widget\.js|varaus", sc.get("src", ""), re.I):
+                return True
+        for a in self.soup.find_all("a", href=True):
+            href = a["href"].lower()
+            if any(d in href for d in self.BOOKING_DOMAINS) or \
+               self.BOOKING_INTENT_HREF_RE.search(href) or \
+               self.BOOKING_INTENT_CTA_RE.search(a.get_text(" ", strip=True)):
+                return True
+        if self.soup.find("form", class_="book-form") or \
+           self.soup.find("form", onsubmit=re.compile(r"preventDefault", re.I)):
+            return True
+        return False
 
     # ── Tekninen SEO ──
 
@@ -1088,10 +1184,11 @@ class PageAuditor:
             except Exception:
                 parse_errors += 1
 
-        types = [str(s.get("@type", "")) for s in schemas if isinstance(s, dict)]
+        # V7.1: @type voi olla lista — litistetään, ettei ["Restaurant"] muutu
+        # merkkijonoksi "['Restaurant']" ja jää tunnistamatta.
+        types = [t for s in schemas for t in schema_types_of(s)]
 
-        has_org  = any(t in ("Organization", "LocalBusiness", "Corporation", "Store")
-                       or t in RESTAURANT_SCHEMA_TYPES for t in types)
+        has_org  = any(t in ORG_SCHEMA_TYPES for t in types)
         has_site = "WebSite" in types
         has_page = any(t in ("WebPage", "Article", "BlogPosting", "Product",
                              "Service", "FAQPage", "HowTo", "ContactPage",
@@ -1110,13 +1207,14 @@ class PageAuditor:
         for s in schemas:
             if not isinstance(s, dict):
                 continue
-            if s.get("@type") == "FAQPage":
+            s_types = schema_types_of(s)
+            if "FAQPage" in s_types:
                 entities = s.get("mainEntity", [])
                 if isinstance(entities, list) and len(entities) >= 3:
                     faq_quality = mf
                 elif isinstance(entities, list) and len(entities) >= 1:
                     faq_quality = mf // 2
-            elif s.get("@type") == "HowTo":
+            elif "HowTo" in s_types:
                 steps = s.get("step", [])
                 if isinstance(steps, list) and len(steps) >= 3:
                     faq_quality = mf
@@ -1157,7 +1255,8 @@ class PageAuditor:
                 d = json.loads(s.string or "{}")
                 items = d.get("@graph", [d]) if isinstance(d, dict) else (d if isinstance(d, list) else [d])
                 for item in items:
-                    if isinstance(item, dict) and str(item.get("@type", "")) in RESTAURANT_SCHEMA_TYPES:
+                    # V7.1: @type voi olla lista (["Restaurant","LocalBusiness"])
+                    if any(t in RESTAURANT_SCHEMA_TYPES for t in schema_types_of(item)):
                         rest_item = item
                         break
             except Exception:
@@ -1279,11 +1378,18 @@ class PageAuditor:
             r"0\d{2}[\s\-]?\d{3}[\s\-]?\d{4}",  # 040 123 4567
             r"tel:",                        # tel: linkit
         ]
-        if any(re.search(p, body, re.I) for p in phone_patterns) or \
-           any(h.startswith("tel:") for h in hrefs):
+        has_phone = any(re.search(p, body, re.I) for p in phone_patterns) or \
+                    any(h.startswith("tel:") for h in hrefs)
+        if has_phone:
             score += 1; found.append("puhelin")
-        else:
+        elif not self.site.is_restaurant() and self._has_postal_address():
+            # V7.1: ei-ravintolalle postiosoite on yhtä pätevä luottamussignaali
+            # kuin puhelinnumero — maksimi ei muutu, vain ansaintatapa
+            score += 1; found.append("postiosoite")
+        elif self.site.is_restaurant():
             missing.append("puhelinnumero")
+        else:
+            missing.append("puhelinnumero tai postiosoite")
 
         # Tietosuoja/privacy (2 pts)
         privacy_kw = ("tietosuoja", "privacy", "gdpr", "tietosuojaseloste", "cookie")
@@ -1310,6 +1416,17 @@ class PageAuditor:
             min(score, m), m, status,
             f"Löytyi: {', '.join(found) if found else '–'}",
             f"Puuttuu: {', '.join(missing)}" if missing else ""))
+
+    def _has_postal_address(self) -> bool:
+        """V7.1: löytyykö sivulta postiosoite — <address>-elementti tai
+        JSON-LD:n PostalAddress."""
+        if self.soup.find("address") is not None:
+            return True
+        for s in self.soup.find_all("script", type="application/ld+json"):
+            raw = s.string or ""
+            if "PostalAddress" in raw or "streetAddress" in raw:
+                return True
+        return False
 
     def _content_quality(self):
         m = self.SCORING["content_quality"]
@@ -1400,10 +1517,23 @@ class PageAuditor:
         else:
             missing.append("toimintakehote (CTA)")
 
-        if any(h.startswith("tel:") for h in hrefs):
+        # V7.1: suora yhteydenottokanava. Ravintolalle se on soittolinkki —
+        # ravintolaan soitetaan. Muulle yritykselle myös ajanvarauslinkki tai
+        # yhteydenottolomake kelpaa: julkaisematon puhelinnumero on tietoinen
+        # valinta, ei SEO-virhe. Maksimipisteet ovat samat molemmissa.
+        has_tel = any(h.startswith("tel:") for h in hrefs)
+        has_meeting = any(_is_meeting_link(h) for h in hrefs)
+        has_form_el = self.soup.find("form") is not None
+        if has_tel:
             score += 2; found.append("soittolinkki")
-        else:
+        elif not self.site.is_restaurant() and has_meeting:
+            score += 2; found.append("ajanvarauslinkki")
+        elif not self.site.is_restaurant() and has_form_el:
+            score += 2; found.append("yhteydenottolomake")
+        elif self.site.is_restaurant():
             missing.append("soittolinkki (tel:)")
+        else:
+            missing.append("suora yhteydenotto (tel:, ajanvarauslinkki tai lomake)")
 
         contact_kw = ("yhteys", "yhteystiedot", "contact")
         has_contact = any(h.startswith("mailto:") for h in hrefs) or \
@@ -1423,6 +1553,16 @@ class PageAuditor:
     KLAR_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*[a-z0-9]$")
     BOOKING_DOMAINS = ("quandoo", "tableonline", "opentable", "resdiary",
                        "thefork", "dinnerbooking", "bookatable")
+    # V7.1: varausintentio sivulla
+    BOOKING_INTENT_TEXT = (
+        "book a table", "book your table", "varaa pöytä", "varaa pöydä",
+        "pöytävaraus", "pöydän varaus", "table reservation", "reserve a table",
+        "boka bord",
+    )
+    BOOKING_INTENT_HREF_RE = re.compile(
+        r"(varaa|varaus|booking|reservation|book-?a-?table)", re.I)
+    BOOKING_INTENT_CTA_RE = re.compile(
+        r"\b(varaa|varaus|book|reserve|reservations?)\b", re.I)
 
     def _booking_widget(self):
         """V5: onko ravintolalla oikea varausmekanismi (widget, muu järjestelmä vai pelkkä demo)."""
@@ -3575,9 +3715,50 @@ def _collect_internal_links(soup, base_url: str, limit: int) -> List[str]:
     return found
 
 
+def _collect_sitemap_links(base_url: str, exclude: Set[str], limit: int) -> List[str]:
+    """V7.1: sivukartan (sitemap.xml) saman hostin URLit ryömintään.
+
+    Sitemapissa oleva mutta mistään linkittämätön sivu on Googlelle olemassa —
+    siksi se kuuluu myös auditoinnin piiriin. Puuttuva tai rikkinäinen sivukartta
+    ei ole virhe: silloin palautetaan tyhjä lista eikä ryömintä muutu."""
+    if limit <= 0:
+        return []
+    pu_base = urlparse(base_url)
+    if not pu_base.scheme or not pu_base.netloc:
+        return []
+    raw = _fetch_optional(f"{pu_base.scheme}://{pu_base.netloc}/sitemap.xml")
+    if not raw:
+        return []
+    try:
+        locs = re.findall(r"<loc>\s*([^<\s][^<]*?)\s*</loc>", raw, re.I)
+    except Exception:
+        return []
+
+    found: List[str] = []
+    seen: Set[str] = {e.rstrip("/") for e in exclude}
+    seen.add(base_url.rstrip("/"))
+    for loc in locs:
+        loc = html_mod.unescape(loc.strip())
+        pu = urlparse(loc)
+        if pu.scheme not in ("http", "https") or pu.netloc != pu_base.netloc:
+            continue
+        path = pu.path or "/"
+        if re.search(r"\.(png|jpe?g|gif|svg|webp|pdf|zip|css|js|ico|xml|txt|woff2?)$", path, re.I):
+            continue
+        clean = f"{pu.scheme}://{pu.netloc}{path}"
+        if clean.rstrip("/") in seen:
+            continue
+        seen.add(clean.rstrip("/"))
+        found.append(clean)
+        if len(found) >= limit:
+            break
+    return found
+
+
 def _crawl_site(url: str, html: str, parser: str, max_pages: int,
                 verbose: bool = False) -> Tuple[Dict[str, str], Dict[str, str]]:
     """V5-ryömintä eriytettynä (V8): aloitussivu + sisäiset alasivut.
+    V7.1: HTML-linkkien jälkeen täydennetään sivukartan sivuilla.
     Palauttaa (pages, page_urls) tiedostonimellä avainnettuna."""
     def fname_of(u: str) -> str:
         f = urlparse(u).path.strip("/").replace("/", "_") or "index"
@@ -3588,6 +3769,14 @@ def _crawl_site(url: str, html: str, parser: str, max_pages: int,
     if max_pages > 1:
         import time
         links = _collect_internal_links(BeautifulSoup(html, parser), url, max_pages - 1)
+        # V7.1: sivukartan sivut HTML-linkkien JÄLKEEN, max_pages-rajan sisällä
+        sitemap_links = _collect_sitemap_links(url, set(links), max_pages - 1 - len(links))
+        if verbose:
+            if sitemap_links:
+                _info(f"Sivukartasta löytyi {len(sitemap_links)} sivua, joita ei ollut sivun linkeissä")
+            elif len(links) < max_pages - 1:
+                _info("Sivukartasta ei tullut uusia sivuja")
+        links = links + sitemap_links
         if links and verbose:
             _info(f"Ryömitään {len(links)} alasivua (kohteliaasti 0,5 s välein)...")
         for link in links:

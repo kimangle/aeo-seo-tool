@@ -148,6 +148,75 @@ yksikkötestiä; päästä päähän -ajo (audit → käsinkorjaus → vertailu 
 tehdyt parannukset, +8 p); v5-JSON vertailusyötteenä (julkaisukunto "uusi tarkistus"
 -tilassa, 0 väärää parannusta, vertailukelpoinen delta 0); sivun poisto/lisäys.
 
+## v7.1 — Liiketyypin tunnistus ja sitemap-ryömintä
+
+*Julkaistu 3.9.2026. Tausta: klarsystems.com sai 76,2 pistettä, mutta 44 pistettä
+488:sta oli mahdotonta ansaita rehellisesti — työkalu luuli B2B-ohjelmistoyritystä
+ravintolaksi, koska sen markkinointiteksti puhuu ruokalistoista ja pöytävarauksista.
+Myydyn tuotteen pitää pisteyttää se, mitä sivusto oikeasti on.*
+
+**1. Liiketyyppi luetaan JSON-LD:stä, ei avainsanoista**
+
+Jos sivuston JSON-LD ilmoittaa muun liiketyypin kuin ruokapaikan
+(`ProfessionalService`, `LegalService`, `Dentist`, `HairSalon`, `Hotel`,
+`SoftwareApplication`, `Corporation`, … yhteensä 24 tyyppiä), avainsanapohjaista
+ravintolapäättelyä ei enää ajeta. Aiemmin kolme osumaa sanoihin *menu, restaurant,
+reservation, book a table, takeaway, kitchen* riitti tekemään mistä tahansa sivusta
+ravintolan.
+
+Listalla **ei** ole paljaita `Organization`-, `LocalBusiness`- eikä `Store`-tyyppejä:
+ne ovat epämääräisiä ja oikeat ravintolat käyttävät niitä usein Restaurant-tyypin
+sijasta. Jos ne olisivat listalla, aidot ravintolat menettäisivät juuri ne
+tarkistukset, joita niille myydään. `--restaurant`-lippu ja käsin annetut
+ravintolatiedot (`--cuisine`, `--menu-url`) voittavat edelleen kaiken.
+
+**2. Ravintolatarkistukset vain ravintoloille — ja vain oikeille sivuille**
+
+"Ravintolan tiedot (schema)" ja "Varauswidget" eivät enää lisää maksimipisteitä
+sivustolle, joka ei ole ravintola. Lisäksi varauswidget tarkistetaan vain sivuilla,
+joilla on varausintentio (teksti "varaa pöytä" / "book a table", varausskripti tai
+varaus-CTA) — tietosuojaseloste ei voi sisältää varausjärjestelmää, joten siitä ei
+enää rangaista.
+
+**3. `ProfessionalService` on validi yritysmerkintä**
+
+JSON-LD-tarkistus tunsi vain `Organization`, `LocalBusiness`, `Corporation` ja
+`Store` -tyypit, joten schema.orgin LocalBusiness-alityypit (kuten
+`ProfessionalService`) menettivät 3 pistettä joka sivulta. Samalla korjattiin
+listamuotoiset `@type`-arvot: `["Restaurant","LocalBusiness"]` muuttui aiemmin
+merkkijonoksi `"['Restaurant', 'LocalBusiness']"` eikä osunut mihinkään — tämä vei
+ravintolalta sekä yrityspisteet että koko Restaurant-skeematarkistuksen.
+
+**4. Puhelinnumeron puute ei ole enää automaattinen virhe B2B-sivustolla**
+
+Ravintolaan soitetaan, joten ravintolatilassa `tel:`-linkki pysyy vaatimuksena.
+Muulla sivustolla samat pisteet ansaitaan myös ajanvarauslinkillä (Calendly, Cal.com,
+HubSpot Meetings, Zcal, SavvyCal) tai yhteydenottolomakkeella, ja luottamuspisteen
+saa puhelimen sijasta postiosoitteella (`<address>` tai JSON-LD:n `PostalAddress`).
+Julkaisematon puhelinnumero on liiketoimintapäätös, ei SEO-virhe. **Maksimipisteet
+eivät muutu kummallakaan sivustotyypillä** — vain se muuttuu, mikä ansaitsee pisteen.
+
+**5. Ryömintä lukee myös sivukartan**
+
+Ryömin keräsi linkit vain HTML:stä, joten sitemap.xml:ssä oleva mutta linkittämätön
+sivu jäi auditin ulkopuolelle, vaikka Google indeksoi sen. Nyt `sitemap.xml` haetaan
+ja saman hostin osoitteet lisätään jonoon HTML-linkkien **jälkeen**, `--max-pages`-rajan
+sisällä ja ilman duplikaatteja. Puuttuva tai rikkinäinen sivukartta ei kaada ajoa.
+
+**Mitattu (3.9.2026):**
+
+| Sivusto | v7.0 | v7.1 | Muutos |
+|---|---|---|---|
+| klarsystems.com (paikallinen esikatselu, 4 sivua) | 372/488 = 76,2 % | 386/440 = 87,7 % | tunnistus `generic`, ravintolatarkistukset pois, JSON-LD 8/18 → 11/18 alasivuilla |
+| ani.fi (oikea ravintola, 3 sivua) | 224/370 = 60,5 % | 224/370 = 60,5 % | ei muutosta — ravintolatila ja Restaurant-tarkistus säilyivät |
+| boom16.vercel.app (oikea ravintola) | 76/134 = 56,7 % | 76/134 = 56,7 % | ei muutosta |
+| anglesmarketing.fi | 323/334 = 96,7 % | 323/334 = 96,7 % | ei muutosta |
+
+Sivukartta-ryömintä testattiin erillisellä fixturella: etusivu ilman sisäisiä
+linkkejä + sitemap, jossa orpo sivu ja vieraan domainin osoite → orpo sivu tuli
+mukaan, vieras domain ei. `--compare` v7.0-JSONia vastaan toimii: poistuneet
+tarkistukset raportoidaan `removed_checks`-listassa eivätkä ne näy huononnuksina.
+
 ## Tärkeät periaatteet (kaikki versiot)
 
 - **Idempotenssi**: `--fix` uudelleen ajettuna ei koskaan duplikoi mitään
