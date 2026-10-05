@@ -86,8 +86,23 @@ def _audit(environ, start_response, origin):
                           {k: result[k] for k in RESPONSE_KEYS}, origin)
 
 
+def _lead_group(source):
+    """SEO-testin liidin ryhmä. anglelabs.fi:n liidit (source 'anglelabs')
+    menevät Anglé Labsin omaan ryhmään, kaikki muu Anglésin ryhmään. Ilman
+    MAILERLITE_LABS_GROUP_ID:tä Labsinkin liidit menevät Anglésin ryhmään,
+    jotta raportti lähtee, kunnes Labsin ryhmällä on oma automaatio."""
+    if source == "anglelabs":
+        labs = os.environ.get("MAILERLITE_LABS_GROUP_ID", "")
+        if labs:
+            return labs
+    return os.environ.get("MAILERLITE_GROUP_ID", "")
+
+
 def _lead(environ, start_response, origin):
     body = _read_json(environ)
+    # Honeypot kuten _auditissa: botille "onnistuminen" ilman MailerLite-kutsua
+    if body.get("website"):
+        return _json_response(start_response, 202, {"ok": True}, origin)
     email = str(body.get("email", "")).strip()
     if not EMAIL_RE.match(email):
         return _json_response(start_response, 400,
@@ -97,7 +112,7 @@ def _lead(environ, start_response, origin):
                               {"error": "Raportin lähetys vaatii suostumuksen"}, origin)
 
     key = os.environ.get("MAILERLITE_API_KEY", "")
-    group = os.environ.get("MAILERLITE_GROUP_ID", "")
+    group = _lead_group(str(body.get("source", "")))
     if not key or not group:
         return _json_response(start_response, 503,
                               {"error": "Lähetys ei ole juuri nyt käytössä"}, origin)
@@ -222,6 +237,8 @@ def _health(start_response):
         "mailerlite_key_set": bool(key),
         "mailerlite_key_len": len(key),
         "mailerlite_group_set": bool(group),
+        "mailerlite_labs_group_set": bool(
+            os.environ.get("MAILERLITE_LABS_GROUP_ID", "")),
         "mailerlite_contact_group_set": bool(
             os.environ.get("MAILERLITE_CONTACT_GROUP_ID", "")),
         "notify_configured": bool(os.environ.get("RESEND_API_KEY", "")

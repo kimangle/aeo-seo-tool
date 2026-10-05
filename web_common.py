@@ -13,6 +13,10 @@ from urllib.parse import urlparse
 DEFAULT_ORIGINS = (
     "https://anglesmarketing.fi",
     "https://www.anglesmarketing.fi",
+    # Anglé Labsin Community-huoneen SEO-kone (source 'anglelabs')
+    "https://anglelabs.fi",
+    "https://www.anglelabs.fi",
+    "https://anglelabs-demo.vercel.app",
 )
 
 
