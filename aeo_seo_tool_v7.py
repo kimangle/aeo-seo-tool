@@ -1442,7 +1442,7 @@ class PageAuditor:
         has_strong_para = best_p_words >= 25
 
         # CTA-tarkistus
-        cta_kw = ("varaa", "osta", "tilaa", "lataa", "aloita", "kokeile",
+        cta_kw = ("varaa", "osta", "tilaa", "lataa", "aloita", "kokeile", "haluan",
                   "contact", "book", "buy", "start", "download", "learn more")
         has_cta = any(any(k in a.get_text(strip=True).lower() for k in cta_kw)
                      for a in self.soup.find_all("a"))
@@ -1508,7 +1508,7 @@ class PageAuditor:
         all_a = self.soup.find_all("a", href=True)
         hrefs = [a["href"].lower() for a in all_a]
 
-        cta_kw = ("varaa", "osta", "tilaa", "lataa", "aloita", "kokeile",
+        cta_kw = ("varaa", "osta", "tilaa", "lataa", "aloita", "kokeile", "haluan",
                   "contact", "book", "buy", "start", "download", "order", "reserve")
         has_cta = any(any(k in a.get_text(strip=True).lower() for k in cta_kw)
                       for a in all_a) or self.soup.find("button") is not None
