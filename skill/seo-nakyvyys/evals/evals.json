@@ -1,0 +1,106 @@
+{
+  "skill_name": "seo-nakyvyys",
+  "evals": [
+    {
+      "id": 1,
+      "eval_name": "audit-all-properties",
+      "prompt": "kato miten mun search consolessa menee",
+      "expected_output": "AUDIT mode. Connects to Chrome (or asks for /chrome), reads every property in config.local.json for 3 and 16 months with all rows, the 28-day comparison and the indexing report, writes the baseline note in the vault and ends with at most five ranked proposals and a question. Builds and publishes nothing.",
+      "files": [],
+      "expectations": [
+        "Loads the Chrome tools with a single ToolSearch call; if none load, asks the user to type /chrome and does not claim to run it itself",
+        "Confirms the signed-in Google account in the Search Console header before reading data, and never signs in or types a password",
+        "Lists every property from the property switcher with its verification state and compares it with config.local.json",
+        "Opens every site in config.local.json with the performance URL pattern from references/gsc-chrome.md, including metrics=CLICKS,IMPRESSIONS,CTR,POSITION, for num_of_months=3 and num_of_months=16",
+        "Reads table rows with scripts/gsc_table.js (javascript_tool) instead of relying on get_page_text alone",
+        "Reads the 28-day comparison (compare_date=PREV) and the indexing report for each verified property",
+        "Reports an unverified property as having no data and proposes the verification file fix instead of inventing numbers",
+        "Every number in the reply and the vault note carries the date range Search Console showed",
+        "Runs date before writing times, and writes <vault>/search-console-YYYY-MM-DD.md following templates/audit-note.md with every ranked item in Ehdotukset (appending a section if the day's note exists), plus the daily note lines",
+        "Ends with at most five numbered proposals, ranked by references/heuristics.md, and asks which to do",
+        "Starts no workflow, creates no branch and publishes nothing"
+      ]
+    },
+    {
+      "id": 2,
+      "eval_name": "diagnose-one-url",
+      "prompt": "miksi mun sivu https://example.fi/koiran-rokotukset ei näy googlessa? siihen tulee näyttöjä mut ei yhtään klikkausta",
+      "expected_output": "DIAGNOSE mode. Checks the live page with verify_prod.sh, inspects the URL through the Search Console search box, reads the page's own queries with page=!, and explains in three lines: the page is indexed and shown (impressions at position 15-30) but the title and content do not answer the question queries. Proposes the decision-table fix and offers IMPROVE.",
+      "files": [],
+      "expectations": [
+        "Runs scripts/verify_prod.sh on the URL and reports status, robots, canonical and title length",
+        "Uses the search box at the top of the property for URL inspection, not the /search-console/inspect?id= URL",
+        "Reads the page's own queries with &page=! and the URL-encoded page URL",
+        "Separates the three cases: no impressions (indexing or crawl), impressions without clicks (title and description), deep position (content)",
+        "Names concrete queries with impressions and positions as evidence, with the date range",
+        "Proposes a fix that matches references/heuristics.md (question title and H1, answer sections, FAQ in sync with FAQPage) and an effort estimate",
+        "Asks before changing anything and does not request indexing for an unchanged page"
+      ]
+    },
+    {
+      "id": 3,
+      "eval_name": "improve-all-sites",
+      "prompt": "paranna näkyvyyttä kaikilla sivuilla",
+      "expected_output": "IMPROVE mode. Reuses a baseline note under 7 days old after saying its date (or audits), writes the ranked plan in the vault, shows at most five items and waits for the choice, gives an agent count and time estimate and stops there for a yes (dry run: the Workflow tool is not started). The filled args and the check_workflow.sh --mock run are the output.",
+      "files": [],
+      "expectations": [
+        "Says the date of the baseline note it reuses, or runs step 1 when there is none under 7 days old",
+        "Writes the ranked plan into the vault note before building and shows at most five items with a question",
+        "States the number of agents (including re-reviewers) and the expected minutes in one line and does not start the Workflow tool without a yes",
+        "Copies references/workflow-template.js to the scratchpad, fills args from config.local.json with absolute paths, a k<N> wt_root, port blocks clear of reserved_ports and create_indexnow_key for sites without a key, and runs scripts/check_workflow.sh with --mock until it passes",
+        "Every agent prompt carries the shared rules: no Skill tool, no Chrome, no SendMessage, no vercel curl or Vercel MCP tools, own worktree from origin/<base>, no push to the base branch, no production deploy, no IndexNow, no Docker, no pkill, own PIDs only",
+        "Task prompts for every site with owner_ok_needed say that owner text (title, description, H1, schema text, llms.txt) goes in separate commits tagged with owner_ok_tag, or on a noindex draft branch",
+        "Tells the user to ask for status with a message instead of pressing stop",
+        "Does not push to main or run vercel deploy --prod"
+      ]
+    },
+    {
+      "id": 4,
+      "eval_name": "release-and-notify",
+      "prompt": "julkaise ne seo-haarat ja ilmoita googlelle",
+      "expected_output": "Release and NOTIFY as a dry run (evals/README.md). Checks release_ok per site, plans the release branch in a new worktree with reverts of commits still waiting for an owner's OK but keeps legally required text that ships with a feature, then stops at the release question and lists the exact commands it would run: fast-forward push for git-auto sites, linked vercel deploy --prod for a vercel-cli site, ff-only update of the user's checkout, verify_prod.sh, indexnow.sh, the Search Console requests, the reminder line and the vault entries.",
+      "files": [],
+      "expectations": [
+        "Treats a site as releasable only when release_ok is true and names release_blockers otherwise",
+        "Asks one release question that covers the indexing requests, sitemap resubmits, any verification and the IndexNow pings, and does not run any write command in the eval",
+        "Plans release/<site>-<date> and the reverts in a new worktree from origin/<base>, never in the user's checkout",
+        "Plans to revert commits tagged as waiting for the owner's OK (owner_ok_tag) unless the vault records the approval, but keeps a privacy notice item a released form needs (tagged with owner_info_tag) and says the owner is told",
+        "Lists a fast-forward push (merge-base --is-ancestor check) for git-auto sites and, for a vercel-cli site, copying only .vercel/project.json, checking projectName, then npx -y vercel@63.1.2 deploy --prod --yes --scope from config",
+        "Lists updating the user's checkout of a vercel-cli site with git merge --ff-only only when main is checked out and clean, otherwise a warning not to deploy from the old checkout",
+        "Runs or lists scripts/verify_prod.sh on the changed URLs, redirects, noindex pages and key files, and scripts/indexnow.sh with --dry-run only",
+        "Plans indexing requests only for the URLs indexnow.sh keeps (changed, indexable, self-canonical) and never for a noindex landing page or a draft",
+        "Plans the follow-up line with dates 14 and 28 days ahead in the Aktiiviset section of the reminders_file and the release shas, requests and IndexNow codes in the vault note"
+      ]
+    },
+    {
+      "id": 5,
+      "eval_name": "follow-up-against-baseline",
+      "prompt": "on 6.12., miten ne seo-muutokset on vaikuttaneet?",
+      "expected_output": "FOLLOW-UP mode. Reads the baseline note of 2026-11-22, reads the same period lengths again, compares per changed page and per targeted query, says what is too early to judge, and proposes the next round without starting it.",
+      "files": [],
+      "expectations": [
+        "Reads <vault>/search-console-2026-11-22.md as the baseline before opening Search Console",
+        "Compares the same period lengths as the baseline (28 days against the previous 28, and 3 months)",
+        "Reports per changed page and per targeted query: clicks, impressions, CTR and position, before and after",
+        "Says what cannot be judged yet (data lag about 2 days, titles 2-4 weeks, new pages 3-6 months) instead of claiming an effect",
+        "Writes the follow-up into a new dated vault note or the baseline note and marks the reminder line",
+        "Proposes the next round ranked by references/heuristics.md and does not start a workflow without a yes"
+      ]
+    },
+    {
+      "id": 6,
+      "eval_name": "new-site-not-in-config",
+      "prompt": "kato miten uuden asiakkaan sivulla esimerkki.fi menee googlessa ja paranna",
+      "expected_output": "The site is not in config.local.json. Searches the vault, GitHub and the home folder for it, reads the config fields the repo tells (remote, base branch, stack, hosting, Vercel project) and asks in one message only for the rest; reads the property list in Search Console; if the property is missing or unverified, explains the domain property (DNS TXT) and HTML file routes and leaves adding the property, DNS and sign-ins to the user. Audits once the property has data, and builds nothing before the plan is approved.",
+      "files": [],
+      "expectations": [
+        "Notices the site is missing from config.local.json and searches the vault, gh repo list and the home folder before asking",
+        "Derives github_repo, base_branch, stack, deploy and vercel_project from the repo as references/new-site.md says, and asks only for what is still missing, in one message",
+        "Reads the property list in Search Console instead of assuming the property exists",
+        "If the property is missing or unverified, explains the DNS TXT and HTML file routes and leaves adding the property, DNS and sign-ins to the user",
+        "If the property has no data yet, limits the work to verification and technical blockers and proposes a reminder for the first real audit",
+        "Does not start a workflow before the ranked plan is written and approved"
+      ]
+    }
+  ]
+}

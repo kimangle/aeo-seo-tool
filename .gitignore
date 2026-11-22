@@ -19,3 +19,8 @@ klar-console/
 .env
 .env.*
 .vercel
+
+# Claude Code -skill: koneen omat asetukset ja yksityiset esimerkit eivät kuulu julkiseen repoon
+skill/seo-nakyvyys/config.local.json
+skill/seo-nakyvyys/references/local/
+skill/**/*.local.json

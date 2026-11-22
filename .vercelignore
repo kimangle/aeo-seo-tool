@@ -9,3 +9,6 @@ __pycache__/
 *.md
 .claude/
 .DS_Store
+
+# Claude Code -skill ei kuulu audit-API:n palvelimelle.
+skill/

@@ -1,0 +1,21 @@
+# Machine settings: real repos, vault path, account
+config.local.json
+*.local.json
+.env
+.env.*
+
+# Private layer: real sites, owners, Search Console numbers and learnings
+references/local/
+
+# Eval runs and scratch output
+*-workspace/
+evals/**/iteration-*/
+evals/**/outputs/
+evals/**/grading.json
+evals/**/benchmark.*
+*.skill
+
+# OS and tool clutter
+.DS_Store
+__pycache__/
+node_modules/

@@ -127,3 +127,22 @@ kansioon, josta ne voi ladata palvelimelle.
 
 - AI-korjaukset ovat idempotentteja: `--fix` uudelleen ajettuna ei duplikoi mitään
 - Ilman `ANTHROPIC_API_KEY`-avainta työkalu toimii pelkkänä auditoijana
+
+## Claude Code -skill
+
+Kansiossa `skill/seo-nakyvyys` on Claude Code -skill, joka parantaa sivuston näkyvyyttä Googlessa yhden kierroksen kerrallaan. Se lukee Search Consolen omassa Chromessasi, priorisoi korjaukset, kirjoittaa suunnitelman muistiinpanoihin, teettää korjaukset agenteilla git-worktreissä ja julkaisee vasta luvallasi. Julkaisun jälkeen se pyytää indeksoinnin, lähettää sivukartat uudelleen ja pingaa IndexNow'n. Tämän repon `aeo_seo_tool_v7.py` on sen valinnainen HTML-auditointi. Tarkemmin: [skill/seo-nakyvyys/README.md](skill/seo-nakyvyys/README.md).
+
+Asennus symlinkillä, jolloin `git pull` päivittää skillin. Jos `~/.claude/skills/seo-nakyvyys` on jo olemassa tavallisena kansiona, siirrä se ensin skills-kansion ulkopuolelle (`mv ~/.claude/skills/seo-nakyvyys ~/seo-nakyvyys-vanha`). Muuten `ln -s` luo linkin vanhan kansion sisään ilman virheilmoitusta, ja Claude Code lataa yhä vanhan version.
+
+```bash
+ln -s <repo>/skill/seo-nakyvyys ~/.claude/skills/seo-nakyvyys
+readlink ~/.claude/skills/seo-nakyvyys     # tulostaa <repo>/skill/seo-nakyvyys
+cd <repo>/skill/seo-nakyvyys
+cp config.example.json config.local.json   # omat sivustot, muistiinpanokansio ja worktree-kansio
+mkdir -p references/local                  # valinnainen: omat esimerkit, opit ja vuotohaun termit
+scripts/tests/run_tests.sh                 # offline-testit
+```
+
+`config.local.json` ja `references/local/` luodaan itse, ja ne ovat gitignoressa. Niihin kuuluvat omat sivustot, asiakkaiden tiedot ja oikeat Search Console -luvut; repossa on vain yleiset ohjeet ja keksityt esimerkit. Skill ei kuulu audit-API:n palvelimelle, joten `skill/` on `.vercelignore`ssa.
+
+`git worktree remove` poistaa gitignoroidut tiedostot kysymättä. Jos `config.local.json` tai `references/local/` on vain worktreessä, kopioi ne päächeckoutiin ennen poistoa.

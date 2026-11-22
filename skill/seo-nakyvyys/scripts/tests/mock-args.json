@@ -1,0 +1,92 @@
+{
+  "date": "2026-11-22",
+  "wt_root": "/tmp/wt-seo-test/k1",
+  "vault_dir": "/tmp/vault",
+  "no_slop_path": "/tmp/no-ai-slop/SKILL.md",
+  "coauthor_line": "Co-Authored-By: Test <test@example.com>",
+  "vercel_cli": "npx -y vercel@63.1.2",
+  "disk_note": "about 9 GB free",
+  "extra_rules": "",
+  "sites": [
+    {
+      "key": "static-site",
+      "domain": "example.fi",
+      "host": "example.fi",
+      "repo": "/tmp/example-site",
+      "github_repo": "owner/example-site",
+      "base_branch": "main",
+      "stack": "static",
+      "web_root": "sivusto",
+      "deploy": "git-auto",
+      "vercel_scope": "team",
+      "prod_build_env": "",
+      "port": 3910,
+      "owner": "Owner",
+      "owner_ok_needed": false,
+      "coauthor_line": true,
+      "create_indexnow_key": true,
+      "context": "Static test site (invented).",
+      "integration_branch": "seo/example-2026-11-22",
+      "lenses": [
+        "tekninen",
+        "sisalto"
+      ],
+      "integrator_extra": "",
+      "tasks": [
+        {
+          "name": "ex-title",
+          "branch": "seo/ex-title",
+          "prompt": "TASK: rewrite the title of /a."
+        },
+        {
+          "name": "ex-en",
+          "branch": "seo/ex-en",
+          "prompt": "TASK: add /en with hreflang."
+        }
+      ],
+      "vercel_project": "example-site",
+      "app_dir": "."
+    },
+    {
+      "key": "client-next",
+      "domain": "client.example.fi",
+      "host": "www.client.example.fi",
+      "repo": "/tmp/client-site",
+      "github_repo": "owner/client-site",
+      "base_branch": "main",
+      "stack": "next",
+      "web_root": "public",
+      "deploy": "vercel-cli",
+      "vercel_scope": "team",
+      "prod_build_env": "SITE_ENV=production",
+      "port": 3920,
+      "owner": "Maija",
+      "owner_ok_needed": true,
+      "coauthor_line": false,
+      "create_indexnow_key": false,
+      "context": "Client Next.js site (invented).",
+      "integration_branch": "seo/client-2026-11-22",
+      "lenses": [
+        "tekninen",
+        "turva",
+        "tietosuoja"
+      ],
+      "integrator_extra": "",
+      "tasks": [
+        {
+          "name": "cl-redirects",
+          "branch": "seo/cl-redirects",
+          "prompt": "TASK: 308 redirects for two old URLs."
+        }
+      ],
+      "owner_ok_tag": "odottaa Maijan OK",
+      "vercel_project": "client-site",
+      "package_manager": "npm",
+      "owner_info_tag": "Maijan tiedoksi"
+    }
+  ],
+  "reserved_ports": [
+    3000,
+    5173
+  ]
+}

@@ -1,0 +1,22 @@
+[
+  {"query": "kato miten mun search consolessa menee", "should_trigger": true},
+  {"query": "miksi mun sivu ei näy googlessa vaikka se on ollu netissä kuukauden", "should_trigger": true},
+  {"query": "paranna näkyvyyttä kaikilla sivuilla", "should_trigger": true},
+  {"query": "miten kampaamon sivuilla menee googlessa, tuleeks klikkauksia?", "should_trigger": true},
+  {"query": "pyydä googlelta indeksointi noille uusille oppaille", "should_trigger": true},
+  {"query": "hinnasto-sivulla on 900 näyttökertaa mut ei klikkauksia, mitä tehään", "should_trigger": true},
+  {"query": "lisää sivukartta ja vahvista asiakkaan sivu search consoleen", "should_trigger": true},
+  {"query": "on taas seurannan aika, vertaa hakutuloksia viime kertaan", "should_trigger": true},
+  {"query": "my new landing page is not indexed yet and the old lovable copy still shows up in google, what should I do?", "should_trigger": true},
+  {"query": "set up IndexNow for my sites and ping the changed pages", "should_trigger": true},
+  {"query": "analysoi kilpailijan kilpailija.fi SEO", "should_trigger": false},
+  {"query": "miten firma näkyis ChatGPT:n vastauksissa", "should_trigger": false},
+  {"query": "kirjoita blogiteksti avainsanalle työuupumus", "should_trigger": false},
+  {"query": "tee Google Ads -kampanja kampaamolle", "should_trigger": false},
+  {"query": "lisää tälle 3d-sivulle title ja meta description", "should_trigger": false},
+  {"query": "vastaa tähän Google-arvosteluun ystävällisesti", "should_trigger": false},
+  {"query": "lisää nettisivulle yhteydenottolomake joka lähettää viestin sähköpostiin", "should_trigger": false},
+  {"query": "tee instagram-reeli kahvilalle, 15 sekuntia, koukku alkuun", "should_trigger": false},
+  {"query": "tee 3d-sivu jossa logo reagoi hiireen", "should_trigger": false},
+  {"query": "tee 15 s mainosvideo higgsfieldillä, paljonko krediittejä menee", "should_trigger": false}
+]

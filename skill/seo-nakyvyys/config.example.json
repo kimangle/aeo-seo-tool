@@ -1,0 +1,89 @@
+{
+  "$comment": "Copy to config.local.json (gitignored) and fill in this machine's values. Keys starting with $ or _ are comments. Paths may start with ~. No secrets belong here: IndexNow keys and Search Console verification file names are public by design (they are served from the site root). API keys, tokens and passwords never go in this file. Real examples, owners and learnings that must stay off a public repository go in references/local/ (also gitignored).",
+
+  "_vault_dir": "Notes vault where the audit notes, plans, daily notes and reminders live.",
+  "vault_dir": "~/path/to/notes-vault",
+
+  "_baseline_note": "File name pattern of the audit note in vault_dir. {date} is YYYY-MM-DD. A second run on the same day appends a section to that day's note instead of overwriting it. FOLLOW-UP uses the newest note that covers the site.",
+  "baseline_note": "search-console-{date}.md",
+
+  "_daily_note": "Daily note pattern in vault_dir, for the 2-5 line session entry. Empty means no daily note.",
+  "daily_note": "daily/{date}.md",
+
+  "_reminders_file": "File in vault_dir with an '## Aktiiviset' (active) section where the follow-up reminder line goes. Empty means: tell the user the dates instead.",
+  "reminders_file": "muistutukset.md",
+
+  "_worktree_root": "Folder for the agents' git worktrees. {mmdd} is the month and day; each round of the day gets a subfolder k1, k2 ... (the workflow's wt_root). Must be outside every repo. Released worktrees are removed after the round (SKILL.md 6.6).",
+  "worktree_root": "~/wt-seo-{mmdd}",
+
+  "_coauthor_line": "Line the agents add at the end of commit messages. Empty means none. A site can turn it off with \"coauthor_line\": false.",
+  "coauthor_line": "",
+
+  "_no_slop_path": "Writing rules file the agents read with the Read tool before writing site text (they never call the Skill tool).",
+  "no_slop_path": "~/.claude/skills/no-ai-slop/SKILL.md",
+
+  "_vercel_cli": "Pinned Vercel CLI command for vercel-cli sites and preview deploys.",
+  "vercel_cli": "npx -y vercel@63.1.2",
+
+  "_aeo_seo_tool": "Optional folder of the HTML audit tool (aeo_seo_tool_v7.py): the root of the repository this skill ships in. Empty means skip that audit step.",
+  "aeo_seo_tool": "",
+
+  "_google_account": "Optional. The Google account that owns the Search Console properties, to confirm in Chrome that the right account is signed in. A site can override it with its own google_account (a client's property where the user is a full user). The skill never signs in.",
+  "google_account": "",
+
+  "_min_free_disk_gb": "Stop before a workflow when free disk is below this. A Next.js integrator with npm ci needs about 0.5 GB per worktree.",
+  "min_free_disk_gb": 5,
+
+  "_port_base": "First local port the workflow hands out to test servers (one block of 10 per site). Agents stop only the PIDs they started.",
+  "port_base": 3900,
+
+  "_reserved_ports": "Ports that belong to the user's own servers. No site's block of 10 may contain one; check_workflow.sh and the template refuse it. Nobody stops these.",
+  "reserved_ports": [],
+
+  "_sites": "One entry per site. references/new-site.md says where each field comes from. Fields: domain (as typed by people), aliases (other names the user uses for the site, for example a nickname), host (canonical host if it differs, for example a www host; IndexNow uses it), gsc_property (sc-domain:<domain> for a domain property, or the full URL prefix with a trailing slash), other_gsc_properties, repo (local clone), github_repo (owner/name), base_branch, also_update_branches (local branches in the user's checkout that follow base_branch and are fast-forwarded after a release; a vercel-cli site lists its base branch, because a deploy from a stale checkout rolls production back), stack (static | next | vite | other), app_dir (folder of the package.json the site builds from, default '.'), package_manager (npm | pnpm | yarn | bun, default npm), web_root (folder served at the site root: where IndexNow and verification files go), deploy (git-auto: a push to base_branch deploys; vercel-cli: only 'vercel deploy --prod' deploys; other: a repo hosted outside Vercel, released by the user per its README; manual: the owner publishes in a site builder, no repo), vercel_scope, vercel_project (must equal projectName in .vercel/project.json), prod_build_env (environment variables that switch a build to production mode), sitemap, indexnow_key (empty until the key file is live), owner, owner_ok_needed (true: new or changed text needs the owner's written OK), owner_ok_tag (commit message tag for such commits, in the owner's grammar, for example \"odottaa Maijan OK\"), owner_info_tag (tag for legally required text that ships with a feature and is only shown to the owner, for example \"Maijan tiedoksi\"), google_account (optional, overrides the global one), coauthor_line (false turns the attribution line off for this repo), vault_notes (context notes to read first), notes (stable facts only; changing state goes to the vault).",
+  "sites": [
+    {
+      "domain": "example.fi",
+      "aliases": ["example"],
+      "host": "www.example.fi",
+      "gsc_property": "sc-domain:example.fi",
+      "other_gsc_properties": [],
+      "repo": "~/example-site",
+      "github_repo": "owner/example-site",
+      "base_branch": "main",
+      "also_update_branches": [],
+      "stack": "next",
+      "app_dir": ".",
+      "package_manager": "npm",
+      "web_root": "public",
+      "deploy": "git-auto",
+      "vercel_scope": "your-team-slug",
+      "vercel_project": "example-site",
+      "prod_build_env": "",
+      "sitemap": "https://www.example.fi/sitemap.xml",
+      "indexnow_key": "",
+      "owner": "Client Name",
+      "owner_ok_needed": true,
+      "owner_ok_tag": "waiting for Client Name OK",
+      "owner_info_tag": "for Client Name's information",
+      "coauthor_line": true,
+      "vault_notes": ["clients/example.md"],
+      "notes": "Stable facts an agent needs: where page text lives, build quirks, which pages are landing pages (noindex)."
+    }
+  ],
+
+  "_tests": "Optional, only for scripts/tests/run_tests.sh --online, which sends read-only GET requests and runs indexnow.sh with --dry-run. online_specs: verify_prod.sh specs that must pass on your live sites; the first spec that is a bare URL must be an indexable page, it is also used for a negative check. indexnow: a site from sites[] whose key file is live, the URLs to dry-run, and optionally a noindex URL that must be skipped. Without this block the online checks are skipped. Instead of online_specs you can set SEO_NAKYVYYS_ONLINE_SPECS to a file in the verify_prod.sh -f format. The values below are placeholders.",
+  "tests": {
+    "online_specs": [
+      "https://www.example.fi/",
+      "https://www.example.fi/old-page -> https://www.example.fi/new-page",
+      "https://www.example.fi/landing noindex",
+      "https://www.example.fi/no-such-page 404"
+    ],
+    "indexnow": {
+      "site": "example.fi",
+      "urls": ["https://www.example.fi/"],
+      "noindex_url": "https://www.example.fi/landing"
+    }
+  }
+}
