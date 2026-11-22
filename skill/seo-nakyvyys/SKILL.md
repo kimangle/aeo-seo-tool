@@ -22,7 +22,7 @@ compatibility: >-
   (vercel@63.1.2) for sites deployed from the command line. Optional: the
   aeo-seo-tool in the same repository (aeo_seo_tool_v7.py) for an HTML audit.
 metadata:
-  version: "0.3.0"
+  version: "0.3.1"
 ---
 
 # seo-nakyvyys
@@ -56,7 +56,7 @@ A site missing from the config, a property missing or unverified in Search Conso
 1. Chrome: follow `references/gsc-chrome.md` section 1. No Chrome tools after one ToolSearch means the user types `/chrome` and presses Enter; only the user can run it. Work in your own new tab.
 2. The Search Console header must show the account in `google_account` (or the site's own `google_account`). A sign-in page or another account: stop, the user signs in.
 3. Run `date` (every time and date you write comes from it), `df -h /` (stop below `min_free_disk_gb`), and `gh auth status`. For a `vercel-cli` site also `npx -y vercel@63.1.2 whoami`: it must be the user's own account and the scope in the config, never a client's or an employer's team.
-4. Read the newest baseline note that covers each site (`<vault>/search-console-*.md`; one note can hold several sites and rounds), `<vault>/<reminders_file>` and each site's `vault_notes`. When a note and reality disagree, trust what you see, fix the note and say so.
+4. Read `<vault>/seo/context.md` (standing SEO state: sites, open items, decisions; JATKA TÄSTÄ first), the newest baseline note that covers each site (`<vault>/seo/search-console-*.md`, older ones may sit in the vault root; one note can hold several sites and rounds), `<vault>/<reminders_file>` and each site's `vault_notes`. When a note and reality disagree, trust what you see, fix the note and say so.
 
 ## 1. Audit
 
@@ -82,8 +82,8 @@ Every ranked item goes into the note's Ehdotukset (3.1); the reply shows at most
 
 ## 3. Plan in the vault
 
-1. Write `<vault>/search-console-YYYY-MM-DD.md` from `templates/audit-note.md`: Luvut, Havainnot, Ehdotukset (every ranked item). If today's note exists, append a section `## <sivustot> klo HH.MM` instead of overwriting it. Add the user's decision in their exact words with the time.
-2. Add 2 to 5 lines to the day's daily note.
+1. Write `<vault>/seo/search-console-YYYY-MM-DD.md` from `templates/audit-note.md`: Luvut, Havainnot, Ehdotukset (every ranked item). If today's note exists, append a section `## <sivustot> klo HH.MM` instead of overwriting it. Add the user's decision in their exact words with the time.
+2. Add 2 to 5 lines to the day's daily note, and update `<vault>/seo/context.md` (JATKA TÄSTÄ, Auki, Päätökset; create it on the first run).
 3. Estimate before building: agents, minutes and how heavy. On 2026-11-22 four sites took 21 agents and 36 minutes, a replacement page with a form and a video took 8 agents and about 40 minutes (video encoding, `npm ci`), and a second round took 15 agents and 23 minutes; the re-review adds one agent per lens that had findings. Over 30 minutes or about 10 agents, ask first.
 4. A one-file fix under 20 minutes is done directly or with one agent, without a reviewer chain. Then the main session reads the whole diff and runs `references/checklists.md` section 1 on a local build: that is its review, and the release question names it ("tarkastettu: diff luettu, paikallinen build").
 

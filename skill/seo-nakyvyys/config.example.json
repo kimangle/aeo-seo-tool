@@ -5,7 +5,7 @@
   "vault_dir": "~/path/to/notes-vault",
 
   "_baseline_note": "File name pattern of the audit note in vault_dir. {date} is YYYY-MM-DD. A second run on the same day appends a section to that day's note instead of overwriting it. FOLLOW-UP uses the newest note that covers the site.",
-  "baseline_note": "search-console-{date}.md",
+  "baseline_note": "seo/search-console-{date}.md",
 
   "_daily_note": "Daily note pattern in vault_dir, for the 2-5 line session entry. Empty means no daily note.",
   "daily_note": "daily/{date}.md",

@@ -16,7 +16,7 @@
         "Reads the 28-day comparison (compare_date=PREV) and the indexing report for each verified property",
         "Reports an unverified property as having no data and proposes the verification file fix instead of inventing numbers",
         "Every number in the reply and the vault note carries the date range Search Console showed",
-        "Runs date before writing times, and writes <vault>/search-console-YYYY-MM-DD.md following templates/audit-note.md with every ranked item in Ehdotukset (appending a section if the day's note exists), plus the daily note lines",
+        "Runs date before writing times, and writes <vault>/seo/search-console-YYYY-MM-DD.md following templates/audit-note.md with every ranked item in Ehdotukset (appending a section if the day's note exists), plus the daily note lines",
         "Ends with at most five numbered proposals, ranked by references/heuristics.md, and asks which to do",
         "Starts no workflow, creates no branch and publishes nothing"
       ]
@@ -79,7 +79,7 @@
       "expected_output": "FOLLOW-UP mode. Reads the baseline note of 2026-11-22, reads the same period lengths again, compares per changed page and per targeted query, says what is too early to judge, and proposes the next round without starting it.",
       "files": [],
       "expectations": [
-        "Reads <vault>/search-console-2026-11-22.md as the baseline before opening Search Console",
+        "Reads <vault>/seo/context.md and <vault>/seo/search-console-2026-11-22.md as the baseline before opening Search Console",
         "Compares the same period lengths as the baseline (28 days against the previous 28, and 3 months)",
         "Reports per changed page and per targeted query: clicks, impressions, CTR and position, before and after",
         "Says what cannot be judged yet (data lag about 2 days, titles 2-4 weeks, new pages 3-6 months) instead of claiming an effect",

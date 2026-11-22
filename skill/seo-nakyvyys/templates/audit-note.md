@@ -1,5 +1,5 @@
 <!--
-Template for the vault note <vault_dir>/search-console-YYYY-MM-DD.md (config baseline_note).
+Template for the vault note <vault_dir>/seo/search-console-YYYY-MM-DD.md (config baseline_note).
 The note is written in the vault's language (Finnish in this template) and grows during the run:
 steps 1-2 fill Luvut, Havainnot and Ehdotukset (every ranked item, not only the five shown);
 step 3 adds the decision; steps 4-6 append Toteutus, Julkaisu and Search Console -toimet.

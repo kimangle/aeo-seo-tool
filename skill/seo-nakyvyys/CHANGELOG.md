@@ -2,6 +2,13 @@
 
 One entry per version, newest first, in the form `## vX.Y.Z (YYYY-MM-DD)`. Site names, owners and workflow ids are left out; the private history is in `references/local/` when it exists.
 
+## v0.3.1 (2026-11-23)
+
+### Changed
+
+- The audit notes live in the vault's `seo/` folder: `seo/search-console-YYYY-MM-DD.md` (SKILL.md 0.4 and 3.1, `baseline_note`, the audit note template and the evals). Older notes may still sit in the vault root, and 0.4 reads both.
+- New standing state file `<vault>/seo/context.md` (JATKA TÄSTÄ, sites, open items, decisions): read in 0.4, updated in 3.2.
+
 ## v0.3.0 (2026-11-22)
 
 The skill moved into the public aeo-seo-tool repository (`skill/seo-nakyvyys`), so its files were split into a public and a private layer.
